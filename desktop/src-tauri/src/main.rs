@@ -114,6 +114,24 @@ fn main() {
                 }).expect("Failed to register global shortcut");
             }
 
+            // Window persistence: restore position/size from config
+            #[cfg(desktop)]
+            {
+                if let Some(w) = app.get_webview_window("main") {
+                    let conf_path = std::env::temp_dir().join("hermes_window_state.json");
+                    if let Ok(data) = std::fs::read_to_string(&conf_path) {
+                        if let Ok(state) = serde_json::from_str::<serde_json::Value>(&data) {
+                            if let (Some(x), Some(y)) = (state["x"].as_i64(), state["y"].as_i64()) {
+                                let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+                            }
+                            if let (Some(w_val), Some(h_val)) = (state["width"].as_i64(), state["height"].as_i64()) {
+                                let _ = w.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w_val as u32, height: h_val as u32 }));
+                            }
+                        }
+                    }
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status]);
@@ -122,9 +140,31 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                let state: tauri::State<AgentState> = app_handle.state();
-                kill_agent(&state);
+            match event {
+                tauri::RunEvent::WindowEvent { label, event: win_event, .. } => {
+                    if label == "main" {
+                        if let tauri::WindowEvent::CloseRequested { .. } = &win_event {
+                            // Save window state before closing
+                            if let Some(w) = app_handle.get_webview_window("main") {
+                                if let Ok(pos) = w.outer_position() {
+                                    if let Ok(size) = w.outer_size() {
+                                        let state = serde_json::json!({
+                                            "x": pos.x, "y": pos.y,
+                                            "width": size.width, "height": size.height,
+                                        });
+                                        let conf_path = std::env::temp_dir().join("hermes_window_state.json");
+                                        let _ = std::fs::write(conf_path, state.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                tauri::RunEvent::Exit => {
+                    let state: tauri::State<AgentState> = app_handle.state();
+                    kill_agent(&state);
+                }
+                _ => {}
             }
         });
 }

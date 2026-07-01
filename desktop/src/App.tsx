@@ -45,6 +45,61 @@ function ThemeToggle() {
   );
 }
 
+function StatusBar() {
+  const { connected } = useWs();
+  const provider = useStore((s) => s.provider);
+  const model = useStore((s) => s.model);
+  const cost = useStore((s) => s.cost);
+  const theme = useStore((s) => s.theme);
+  const isDark = theme === "dark";
+
+  const formatCost = (c: number | null) => {
+    if (c === null || c === undefined) return "$0.00";
+    return c < 0.01 ? "<$0.01" : `$${c.toFixed(2)}`;
+  };
+  const providerShort = (p: string) => {
+    const map: Record<string, string> = {
+      openai: "OpenAI", anthropic: "Anthropic", google: "Gemini",
+      groq: "Groq", ollama: "Ollama", openrouter: "OpenRouter",
+      xai: "xAI", deepseek: "DeepSeek", zhipu: "GLM",
+      mistral: "Mistral", together: "Together", fireworks: "Fireworks",
+      cohere: "Cohere", perplexity: "PPLX", novita: "Novita",
+      bedrock: "Bedrock", azure: "Azure", huggingface: "HF",
+      replicate: "Replicate", moonshot: "Moonshot",
+    };
+    return map[p] || p;
+  };
+
+  const totalCost = cost?.total_cost ?? 0;
+
+  return (
+    <div style={{
+      height: 28, display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "0 16px", fontSize: 11, fontFamily: "'JetBrains Mono', monospace",
+      borderTop: `1px solid ${isDark ? "#2a2a3e" : "#c0c0d0"}`,
+      background: isDark ? "#12121f" : "#d8d8e0",
+      color: isDark ? "#777" : "#666",
+      flexShrink: 0,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{
+            width: 6, height: 6, borderRadius: "50%",
+            background: connected ? "#44cc88" : "#ff5555",
+          }} />
+          {connected ? "Connected" : "Disconnected"}
+        </span>
+        <span style={{ color: isDark ? "#999" : "#555" }}>|</span>
+        <span>{providerShort(provider)} · {model}</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+        <span>Cost: <strong style={{ color: totalCost > 1 ? "#ff8866" : "#44cc88" }}>{formatCost(totalCost)}</strong></span>
+        <span style={{ color: isDark ? "#555" : "#999" }}>⌘K focus · ⌘⇧H toggle window</span>
+      </div>
+    </div>
+  );
+}
+
 function StartupOverlay() {
   const { connected, connecting } = useWs();
   const [dismissed, setDismissed] = useState(false);
@@ -190,6 +245,7 @@ function AppContent() {
           {activeTab === "settings" && <SettingsPanel />}
         </main>
       </div>
+      <StatusBar />
     </div>
   );
 }

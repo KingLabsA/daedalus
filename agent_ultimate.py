@@ -692,73 +692,44 @@ class ProviderRouter:
                     self.usage = type('U', (), {"prompt_tokens": resp.usage.input_tokens, "completion_tokens": resp.usage.output_tokens})()
             yield None, StreamResult(), {}
 
+        elif cfg.get("lib") == "google.generativeai":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            gen_model = genai.GenerativeModel(model)
+            system = next((m["content"] for m in messages if m["role"] == "system"), "")
+            history = []
+            for m in messages:
+                if m["role"] == "system": continue
+                history.append({"role": "model" if m["role"] == "assistant" else "user", "parts": [m.get("content", "")]})
+            chat = gen_model.start_chat(history=history[:-1] if history else [])
+            last_msg = history[-1]["parts"][0] if history else "Hello"
+            content_parts = []
+            tool_calls = []
+            for chunk in chat.send_message_streaming(last_msg):
+                if hasattr(chunk, "text") and chunk.text:
+                    content_parts.append(chunk.text)
+                    yield chunk.text, None, None
+            resp = chat.last if hasattr(chat, "last") else None
+            usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            if resp and hasattr(resp, "usage_metadata"):
+                usage = {
+                    "prompt_tokens": getattr(resp.usage_metadata, "prompt_token_count", 0),
+                    "completion_tokens": getattr(resp.usage_metadata, "candidates_token_count", 0),
+                }
+            _track_cost(provider, usage["prompt_tokens"], usage["completion_tokens"])
+            class StreamResult:
+                def __init__(self):
+                    self.content = "".join(content_parts) or None
+                    self.tool_calls = tool_calls
+                    self.usage = type('U', (), usage)()
+            yield None, StreamResult(), usage
+
         else:
             # Fallback: non-streaming
             result = ProviderRouter.call(messages, tools_schemas, provider)
             yield None, result, {}
-        provider = provider or LLM_PROVIDER
-        cfg = PROVIDER_CONFIGS.get(provider)
-        if not cfg: raise ValueError(f"Unsupported provider: {provider}")
-        model = os.getenv("MODEL_NAME", cfg.get("default_model", "gpt-4o-mini"))
 
-        base = cfg.get("base")
-        api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
-        lib = cfg.get("lib")
 
-        if lib == "openai":
-            import openai
-            client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
-            om = []
-            for m in messages:
-                if m["role"] == "system": om.append({"role": "system", "content": m["content"]})
-                elif m["role"] == "user": om.append({"role": "user", "content": m.get("content","")})
-                elif m["role"] == "assistant": om.append({"role": "assistant", "content": m.get("content","")})
-                elif m["role"] == "tool": om.append({"role": "tool", "tool_call_id": m.get("tool_call_id",""), "content": m["content"]})
-            resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None)
-            _track_cost(provider, resp.usage.prompt_tokens if resp.usage else 0, resp.usage.completion_tokens if resp.usage else 0)
-            return resp.choices[0].message
-
-        elif lib == "anthropic":
-            import anthropic
-            client = anthropic.Anthropic(api_key=api_key)
-            system = next((m["content"] for m in messages if m["role"] == "system"), "")
-            cm = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] in ["user","assistant"]]
-            an_tools = [{"name": t["function"]["name"], "description": t["function"]["description"], "input_schema": t["function"]["parameters"]} for t in tools_schemas]
-            resp = client.messages.create(model=model, system=system, messages=cm, tools=an_tools, max_tokens=4096)
-            _track_cost(provider, resp.usage.input_tokens if resp.usage else 0, resp.usage.output_tokens if resp.usage else 0)
-            class Dummy:
-                def __init__(self, r):
-                    self.content = None; self.tool_calls = []
-                    for b in r.content:
-                        if b.type == "text": self.content = b.text
-                        elif b.type == "tool_use": self.tool_calls.append({"id": b.id, "function": {"name": b.name, "arguments": json.dumps(b.input)}})
-            return Dummy(resp)
-
-        elif lib == "cohere":
-            import cohere
-            client = cohere.Client(api_key=api_key)
-            # cohere uses a different API — simplified chat
-            last = messages[-1]["content"] if messages else "Hello"
-            resp = client.chat(model=model, message=last)
-            class Dummy:
-                def __init__(self, r):
-                    self.content = r.text; self.tool_calls = []
-            return Dummy(resp)
-
-        elif lib == "google.generativeai":
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            gen_model = genai.GenerativeModel(model)
-            last = messages[-1]["content"] if messages else "Hello"
-            resp = gen_model.generate_content(last)
-            class Dummy:
-                def __init__(self, r):
-                    self.content = r.text; self.tool_calls = []
-            return Dummy(resp)
-
-        raise ValueError(f"Provider '{provider}' not fully implemented yet.")
-
-# ============== GOAL MANAGER ==============
 class GoalManager:
     def __init__(self, goal: str):
         self.goal = goal; self.history = []; self.completed = False
