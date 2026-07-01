@@ -54,6 +54,17 @@ export interface HookEvent {
   data?: unknown;
 }
 
+export interface WatcherStatus {
+  running: boolean;
+  pendingChanges: number;
+}
+
+export interface ModelList {
+  provider: string;
+  models: string[];
+  current: string;
+}
+
 interface AgentState {
   connected: boolean;
   connecting: boolean;
@@ -82,6 +93,8 @@ interface AgentState {
   indexStats: IndexStats | null;
   pendingApprovals: Array<{ id: string; tool: string; args: unknown; timestamp: number }>;
   hookLog: HookEvent[];
+  watcherStatus: WatcherStatus | null;
+  modelList: ModelList | null;
   addMessage: (msg: Message) => void;
   setConnected: (v: boolean) => void;
   setConnecting: (v: boolean) => void;
@@ -110,6 +123,8 @@ interface AgentState {
   setIndexStats: (s: IndexStats | null) => void;
   setPendingApprovals: (a: Array<{ id: string; tool: string; args: unknown; timestamp: number }>) => void;
   addHookEvent: (e: HookEvent) => void;
+  setWatcherStatus: (w: WatcherStatus | null) => void;
+  setModelList: (m: ModelList | null) => void;
 }
 
 const emptyKanban: KanbanState = { todo: [], in_progress: [], review: [], done: [] };
@@ -142,6 +157,8 @@ export const useStore = create<AgentState>((set) => ({
   indexStats: null,
   pendingApprovals: [],
   hookLog: [],
+  watcherStatus: null,
+  modelList: null,
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setConnected: (v) => set({ connected: v }),
   setConnecting: (v) => set({ connecting: v }),
@@ -170,6 +187,8 @@ export const useStore = create<AgentState>((set) => ({
   setIndexStats: (s) => set({ indexStats: s }),
   setPendingApprovals: (a) => set({ pendingApprovals: a }),
   addHookEvent: (e) => set((s) => ({ hookLog: [...s.hookLog.slice(-99), e] })),
+  setWatcherStatus: (w) => set({ watcherStatus: w }),
+  setModelList: (m) => set({ modelList: m }),
 }));
 
 export interface StoreState extends AgentState {

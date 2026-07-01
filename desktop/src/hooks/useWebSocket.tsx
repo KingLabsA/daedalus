@@ -50,6 +50,8 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
         ws.send(JSON.stringify({ type: "command", command: "index:stats" }));
         ws.send(JSON.stringify({ type: "command", command: "safety:status" }));
         ws.send(JSON.stringify({ type: "command", command: "safety:pending" }));
+        ws.send(JSON.stringify({ type: "command", command: "models" }));
+        ws.send(JSON.stringify({ type: "command", command: "watcher:status" }));
       };
 
     ws.onmessage = (event) => {
@@ -148,7 +150,10 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
             st.setModel(data.data);
             break;
           case "watcher_status":
-            // could add watcher state to store if needed
+            st.setWatcherStatus({ running: data.data?.running ?? false, pendingChanges: data.data?.pending_changes ?? 0 });
+            break;
+          case "models":
+            st.setModelList(data.data);
             break;
           case "grep_results":
           case "explain":

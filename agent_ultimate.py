@@ -1182,7 +1182,7 @@ PROVIDER_CONFIGS = {
     "anthropic":  {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-3-5-sonnet-20241022"},
     "openrouter": {"env": "OPENROUTER_API_KEY",   "lib": "openai",     "base": "https://openrouter.ai/api/v1", "default_model": "openai/gpt-4o-mini"},
     "ollama":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "qwen2.5-coder:7b"},
-    "hermes":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "hermes3:8b", "description": "Nous Hermes 3 via Ollama — uncensored, tool-use, reasoning"},
+    "hermes":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "hermes3:8b", "description": "Nous Hermes 3 via Ollama — uncensored, tool-use, reasoning", "models": ["hermes3:3b", "hermes3:8b", "hermes3:70b", "hermes3:405b"]},
     "google":     {"env": "GOOGLE_API_KEY",       "lib": "google.generativeai", "default_model": "gemini-1.5-pro"},
     "groq":       {"env": "GROQ_API_KEY",         "lib": "openai",     "base": "https://api.groq.com/openai/v1", "default_model": "llama3-70b-8192"},
     "xai":        {"env": "XAI_API_KEY",          "lib": "openai",     "base": "https://api.x.ai/v1", "default_model": "grok-2-1212"},
@@ -1741,6 +1741,11 @@ class WebSocketServer:
                     elif cmd.startswith("skill-versions:"):
                         name = cmd.split(":", 1)[1]
                         await websocket.send(json.dumps({"type":"skill-versions", "data":PluginMarketplace.get_skill_versions(name)}))
+                    elif cmd == "models":
+                        cur = self.agent.provider
+                        cfg = PROVIDER_CONFIGS.get(cur, {})
+                        models = cfg.get("models", [cfg.get("default_model", "unknown")])
+                        await websocket.send(json.dumps({"type":"models", "data":{"provider": cur, "models": models, "current": os.environ.get("MODEL_NAME", cfg.get("default_model", ""))}}))
                     elif cmd.startswith("provider:"):
                         p = cmd.split(":")[1]
                         self.agent.provider = p
