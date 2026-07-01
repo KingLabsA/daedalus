@@ -1,13 +1,35 @@
 import React, { useState } from "react";
 import { useStore } from "../../store/session";
 import { useAgent } from "../../hooks/useAgent";
+import { useWs } from "../../hooks/useWebSocket";
+
+const PROVIDER_MODELS: Record<string, string[]> = {
+  openai: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
+  anthropic: ["claude-sonnet-4-20250514", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
+  openrouter: ["auto"],
+  ollama: ["llama3.2", "qwen2.5", "codellama"],
+  google: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+  deepseek: ["deepseek-chat", "deepseek-coder"],
+  groq: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+};
+
+const SAFETY_COLORS: Record<string, string> = {
+  suggest: "#ffaa44",
+  plan: "#66aaff",
+  auto: "#44cc88",
+};
 
 export default function Composer() {
   const [prompt, setPrompt] = useState("");
   const [mode, setMode] = useState<"chat" | "goal" | "multitask">("chat");
   const { send, loading } = useAgent();
+  const { switchModel } = useWs();
   const skills = useStore((s) => s.skills);
   const tools = useStore((s) => s.tools);
+  const provider = useStore((s) => s.provider);
+  const model = useStore((s) => s.model);
+  const safetyMode = useStore((s) => s.safetyMode);
+  const setModel = useStore((s) => s.setModel);
 
   const handleRun = () => {
     if (!prompt.trim() || loading) return;
@@ -15,6 +37,11 @@ export default function Composer() {
     else if (mode === "multitask") send(`/multitask ${prompt}`);
     else send(prompt);
     setPrompt("");
+  };
+
+  const handleModelSwitch = (m: string) => {
+    setModel(m);
+    switchModel(m);
   };
 
   const MODE_DESC: Record<string, string> = {
@@ -33,21 +60,36 @@ export default function Composer() {
     <div style={styles.container}>
       <div style={styles.header}>
         <span style={{ fontWeight: 600, fontSize: 14 }}>Composer</span>
-        <div style={styles.modeRow}>
-          {(["chat", "goal", "multitask"] as const).map((m) => (
-            <button
-              key={m}
-              style={{
-                ...styles.modeBtn,
-                background: mode === m ? "#7c7cff" : "transparent",
-                color: mode === m ? "#fff" : "#888",
-                borderColor: mode === m ? "#7c7cff" : "#3a3a5c",
-              }}
-              onClick={() => setMode(m)}
-            >
-              {m}
-            </button>
-          ))}
+        <div style={styles.headerRight}>
+          <div style={styles.safetyBadge}>
+            <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: SAFETY_COLORS[safetyMode], marginRight: 5 }} />
+            {safetyMode}
+          </div>
+          <select
+            style={styles.modelSelect}
+            value={model}
+            onChange={(e) => handleModelSwitch(e.target.value)}
+          >
+            {PROVIDER_MODELS[provider]?.map((m) => (
+              <option key={m} value={m}>{m}</option>
+            ))}
+          </select>
+          <div style={styles.modeRow}>
+            {(["chat", "goal", "multitask"] as const).map((m) => (
+              <button
+                key={m}
+                style={{
+                  ...styles.modeBtn,
+                  background: mode === m ? "#7c7cff" : "transparent",
+                  color: mode === m ? "#fff" : "#888",
+                  borderColor: mode === m ? "#7c7cff" : "#3a3a5c",
+                }}
+                onClick={() => setMode(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -60,6 +102,11 @@ export default function Composer() {
           onChange={(e) => setPrompt(e.target.value)}
           placeholder={MODE_PLACEHOLDER[mode]}
           rows={8}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              handleRun();
+            }
+          }}
         />
 
         <button
@@ -70,7 +117,7 @@ export default function Composer() {
           onClick={handleRun}
           disabled={loading || !prompt.trim()}
         >
-          {loading ? "Running..." : "Run"}
+          {loading ? "Running..." : "Run"} <span style={{ fontSize: 10, opacity: 0.7 }}>(⌘Enter)</span>
         </button>
 
         <div style={{ ...styles.sectionTitle, marginTop: 28 }}>Available Tools</div>
@@ -112,6 +159,32 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "space-between",
     alignItems: "center",
     minHeight: 48,
+  },
+  headerRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+  },
+  safetyBadge: {
+    fontSize: 10,
+    padding: "3px 8px",
+    borderRadius: 10,
+    background: "#1a1a30",
+    border: "1px solid #3a3a5c",
+    color: "#aaa",
+    display: "flex",
+    alignItems: "center",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  modelSelect: {
+    padding: "4px 8px",
+    borderRadius: 6,
+    border: "1px solid #3a3a5c",
+    background: "#1e1e36",
+    color: "#e0e0e0",
+    fontSize: 11,
+    outline: "none",
   },
   modeRow: { display: "flex", gap: 4 },
   modeBtn: {

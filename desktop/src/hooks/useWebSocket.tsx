@@ -8,6 +8,8 @@ export interface WsContextValue {
   send: (text: string) => void;
   sendCommand: (cmd: string) => void;
   switchProvider: (p: string) => void;
+  switchModel: (m: string) => void;
+  switchSafety: (m: "suggest" | "plan" | "auto") => void;
   command: (cmd: string) => void;
   connected: boolean;
   connecting: boolean;
@@ -44,6 +46,9 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
         ws.send(JSON.stringify({ type: "command", command: "lsp" }));
         ws.send(JSON.stringify({ type: "command", command: "logs" }));
         ws.send(JSON.stringify({ type: "command", command: "sessions" }));
+        ws.send(JSON.stringify({ type: "command", command: "checkpoints" }));
+        ws.send(JSON.stringify({ type: "command", command: "index:stats" }));
+        ws.send(JSON.stringify({ type: "command", command: "safety:status" }));
       };
 
     ws.onmessage = (event) => {
@@ -123,6 +128,24 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
           case "git_log":
             st.setGitLog(data.data);
             break;
+          case "safety_mode":
+            st.setSafetyMode(data.data);
+            break;
+          case "checkpoints":
+            st.setCheckpoints(data.data || []);
+            break;
+          case "index_stats":
+            st.setIndexStats(data.data);
+            break;
+          case "pending_approvals":
+            st.setPendingApprovals(data.data || []);
+            break;
+          case "hook_event":
+            st.addHookEvent(data.data);
+            break;
+          case "model":
+            st.setModel(data.data);
+            break;
         }
 
         // notify subscribers
@@ -199,6 +222,14 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
     sendCommand(`provider:${p}`);
   }, [sendCommand]);
 
+  const switchModel = useCallback((m: string) => {
+    sendCommand(`model:${m}`);
+  }, [sendCommand]);
+
+  const switchSafety = useCallback((m: "suggest" | "plan" | "auto") => {
+    sendCommand(`safety:mode:${m}`);
+  }, [sendCommand]);
+
   const command = sendCommand;
 
   const subscribe = useCallback((type: string, handler: (data: any) => void) => {
@@ -212,7 +243,7 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <WsContext.Provider value={{ send, sendCommand, switchProvider, command, connected, connecting, subscribe }}>
+    <WsContext.Provider value={{ send, sendCommand, switchProvider, switchModel, switchSafety, command, connected, connecting, subscribe }}>
       {children}
     </WsContext.Provider>
   );

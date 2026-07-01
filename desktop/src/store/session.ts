@@ -35,6 +35,25 @@ export interface FileNode {
   children?: FileNode[];
 }
 
+export interface Checkpoint {
+  id: string;
+  label: string;
+  timestamp: number;
+  filesChanged: number;
+}
+
+export interface IndexStats {
+  totalFiles: number;
+  totalChunks: number;
+  lastUpdated: number | null;
+}
+
+export interface HookEvent {
+  hook: string;
+  timestamp: number;
+  data?: unknown;
+}
+
 interface AgentState {
   connected: boolean;
   connecting: boolean;
@@ -58,6 +77,11 @@ interface AgentState {
   gitBranches: string;
   gitLog: string;
   theme: "dark" | "light";
+  safetyMode: "suggest" | "plan" | "auto";
+  checkpoints: Checkpoint[];
+  indexStats: IndexStats | null;
+  pendingApprovals: Array<{ id: string; tool: string; args: unknown; timestamp: number }>;
+  hookLog: HookEvent[];
   addMessage: (msg: Message) => void;
   setConnected: (v: boolean) => void;
   setConnecting: (v: boolean) => void;
@@ -81,6 +105,11 @@ interface AgentState {
   setGitBranches: (b: string) => void;
   setGitLog: (l: string) => void;
   setTheme: (t: "dark" | "light") => void;
+  setSafetyMode: (m: "suggest" | "plan" | "auto") => void;
+  setCheckpoints: (c: Checkpoint[]) => void;
+  setIndexStats: (s: IndexStats | null) => void;
+  setPendingApprovals: (a: Array<{ id: string; tool: string; args: unknown; timestamp: number }>) => void;
+  addHookEvent: (e: HookEvent) => void;
 }
 
 const emptyKanban: KanbanState = { todo: [], in_progress: [], review: [], done: [] };
@@ -108,6 +137,11 @@ export const useStore = create<AgentState>((set) => ({
   gitBranches: "",
   gitLog: "",
   theme: "dark",
+  safetyMode: "auto",
+  checkpoints: [],
+  indexStats: null,
+  pendingApprovals: [],
+  hookLog: [],
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setConnected: (v) => set({ connected: v }),
   setConnecting: (v) => set({ connecting: v }),
@@ -131,8 +165,16 @@ export const useStore = create<AgentState>((set) => ({
   setGitBranches: (b) => set({ gitBranches: b }),
   setGitLog: (l) => set({ gitLog: l }),
   setTheme: (t) => set({ theme: t }),
+  setSafetyMode: (m) => set({ safetyMode: m }),
+  setCheckpoints: (c) => set({ checkpoints: c }),
+  setIndexStats: (s) => set({ indexStats: s }),
+  setPendingApprovals: (a) => set({ pendingApprovals: a }),
+  addHookEvent: (e) => set((s) => ({ hookLog: [...s.hookLog.slice(-99), e] })),
 }));
 
 export interface StoreState extends AgentState {
   setSessions: (s: string[]) => void;
+  setSafetyMode: (m: "suggest" | "plan" | "auto") => void;
+  setCheckpoints: (c: Checkpoint[]) => void;
+  setIndexStats: (s: IndexStats | null) => void;
 }

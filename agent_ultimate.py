@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-import os, sys, json, sqlite3, subprocess, threading, time, asyncio, tempfile, inspect, importlib, io, uuid, socket
+import os, sys, json, sqlite3, subprocess, threading, time, asyncio, tempfile, inspect, importlib, io, uuid, socket, hashlib, re
 from pathlib import Path
 import shutil
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -28,11 +28,10 @@ def _is_safe_command(cmd: str) -> bool:
 
 def _check_prompt_injection(text: str) -> bool:
     lowered = text.lower()
-    matches = 0
     for pattern in PROMPT_INJECTION_PATTERNS:
         if pattern in lowered:
-            matches += 1
-    return matches >= 3
+            return True
+    return False
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
@@ -40,11 +39,14 @@ MAX_MESSAGES = 30
 DB_FILE = os.getenv("DB_FILE", "hermes_ultimate.db")
 SKILLS_DIR = Path(os.getenv("SKILLS_DIR", ".hermes/skills"))
 SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+CHECKPOINTS_DIR = Path(os.getenv("CHECKPOINTS_DIR", ".hermes/checkpoints"))
+CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 WS_HOST = os.getenv("WS_HOST", "127.0.0.1")
 WS_PORT = int(os.getenv("WS_PORT", "8765"))
 PLUGINS_DIR = Path(os.getenv("PLUGINS_DIR", "plugins"))
 PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
 PLUGIN_REGISTRY_URL = os.getenv("PLUGIN_REGISTRY_URL", "https://hermes-plugins.fake")
+SAFETY_MODE = os.getenv("SAFETY_MODE", "suggest")  # suggest, plan, auto
 
 # Streaming queue for live command output
 _stream_queue: List[Dict] = []
@@ -59,7 +61,7 @@ def _drain_stream() -> List[Dict]:
         return out
 
 # Cost tracking
-    COST_PER_1K: Dict[str, Dict[str, float]] = {
+COST_PER_1K: Dict[str, Dict[str, float]] = {
     "openai": {"input": 0.00025, "output": 0.001},
     "anthropic": {"input": 0.003, "output": 0.015},
     "groq": {"input": 0.0001, "output": 0.0001},
@@ -168,8 +170,8 @@ def write_file(filepath: str, content: str) -> str:
         with open(fp) as f: before = f.read()
     with open(fp, "w") as f: f.write(content)
     diff = ""
-    if before:
-        diff = _git_diff(filepath) if before == "" else _git_diff(filepath)
+    if before and before != content:
+        diff = _git_diff(filepath)
     _git_stage(fp)
     _push_stream({"type":"file_written","filepath":filepath})
     return f"Written to {filepath}"
@@ -235,48 +237,27 @@ def git_undo() -> str:
 def lsp_diagnostics(target: str = ".") -> str:
     return _pyright_diagnostics(target)
 
-@registry.register(description="Write content to a file (auto-stages changes for git)")
-def write_file(filepath: str, content: str) -> str:
-    if len(content) > MAX_FILE_SIZE:
-        return f"Error: File too large ({len(content)} bytes). Max: {MAX_FILE_SIZE}"
-    fp = os.path.expanduser(filepath)
-    before = ""
-    if os.path.exists(fp):
-        with open(fp) as f: before = f.read()
-    with open(fp, "w") as f: f.write(content)
-    diff = ""
-    if before:
-        diff = _git_diff(filepath) if before == "" else _git_diff(filepath)
-    _git_stage(fp)
-    _push_stream({"type":"file_written","filepath":filepath})
-    return f"Written to {filepath}"
-
-@registry.register(description="Stream command output line by line (live). Use for long-running cmds like build/test.")
-def run_command(command: str, working_dir: str = "", use_docker: bool = True, image: str = "python:3.12-slim") -> str:
+@registry.register(description="Run a shell command. Streams output live. Use use_docker=false for local execution.")
+def run_command(command: str, working_dir: str = "", use_docker: str = "false", image: str = "python:3.12-slim") -> str:
     if not _is_safe_command(command):
         return f"Error: Command blocked for security: {command[:80]}"
-    def _stream_cmd(cmd):
-        try:
-            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=working_dir or None)
-            for line in iter(proc.stdout.readline, ""):
-                _push_stream({"type":"stream","line":line.rstrip()})
-            proc.wait()
-            _push_stream({"type":"stream","line":f"[exit code {proc.returncode}]"})
-            return f"Exit code: {proc.returncode}"
-        except Exception as e:
-            _push_stream({"type":"stream","line":f"[error: {e}]"})
-            return f"Error: {e}"
-    if use_docker and shutil.which("docker"):
+    use_docker_flag = use_docker.lower() == "true" if isinstance(use_docker, str) else bool(use_docker)
+    if use_docker_flag and shutil.which("docker"):
         cname = f"hermes-{uuid.uuid4().hex[:8]}"
         mount = f"{os.getcwd()}:/workspace"
         wd = working_dir or "/workspace"
         cmd = f'docker run --rm --name {cname} -v "{mount}" -w {wd} {image} sh -c "{command}"'
     else:
         cmd = command
-    t = threading.Thread(target=_stream_cmd, args=(cmd,), daemon=True)
-    t.start()
-    t.join(timeout=120)
-    return f"Command started: {command[:80]}"
+    try:
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=working_dir or None, timeout=120)
+        output = proc.stdout + proc.stderr
+        _push_stream({"type":"stream","line":output[-2000:] if len(output) > 2000 else output})
+        return output or f"Exit code: {proc.returncode}"
+    except subprocess.TimeoutExpired:
+        return f"Command timed out after 120s: {command[:80]}"
+    except Exception as e:
+        return f"Error: {e}"
 
 @registry.register(description="Search for a pattern in files")
 def search_code(pattern: str, path: str = ".") -> str:
@@ -357,9 +338,7 @@ def process_image(filepath: str) -> str:
 @registry.register(description="Call an MCP server tool. Pass server name, tool name, and arguments as JSON string.")
 def mcp_call(server: str, tool: str, arguments: str = "{}") -> str:
     try:
-        import subprocess, json
         args = json.loads(arguments)
-        # assume mcp CLI tool is installed
         cmd = ["mcp", "call", server, tool] if not args else ["mcp", "call", server, tool, "-a", json.dumps(args)]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         return r.stdout or r.stderr or "(no output)"
@@ -469,7 +448,7 @@ def confirm_write(write_id: str) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
         subprocess.run(["git","add", filepath], capture_output=True, text=True)
-        return f"✅ Written {filepath} ({len(content)} chars)"
+        return f"Written {filepath} ({len(content)} chars)"
     except Exception as e: return f"confirm_write error: {e}"
 
 @registry.register(description="Discard a pending file write (from suggest_write).")
@@ -507,13 +486,53 @@ def _get_cost_summary() -> dict:
         by_provider[p]["cost"] += c["cost"]
     return {"total_cost": round(total_cost, 4), "total_input_tokens": total_in, "total_output_tokens": total_out, "session_calls": len(session_costs), "by_provider": by_provider}
 
+# ============== SELF-HEALER ==============
+class SelfHealer:
+    @staticmethod
+    def analyze_error(error: str, context: str = "") -> str:
+        """Analyze an error and suggest a fix strategy."""
+        error_lower = error.lower()
+        if "import" in error_lower or "module" in error_lower:
+            return f"Import error detected. Try: pip install <missing-module> or check sys.path. Context: {context[:200]}"
+        elif "syntax" in error_lower:
+            return f"Syntax error. Check for missing colons, brackets, or indentation. Context: {context[:200]}"
+        elif "type" in error_lower and "error" in error_lower:
+            return f"Type error. Check variable types and function signatures. Context: {context[:200]}"
+        elif "attribute" in error_lower:
+            return f"Attribute error. The object may not have this method/property. Context: {context[:200]}"
+        elif "timeout" in error_lower:
+            return f"Timeout error. The operation took too long. Try increasing timeout or simplifying. Context: {context[:200]}"
+        elif "connection" in error_lower or "network" in error_lower:
+            return f"Network error. Check connectivity and API endpoints. Context: {context[:200]}"
+        elif "permission" in error_lower or "access" in error_lower:
+            return f"Permission error. Check file permissions and API keys. Context: {context[:200]}"
+        else:
+            return f"Unknown error pattern. Manual investigation needed. Context: {context[:200]}"
+
+    @staticmethod
+    def auto_fix(tool_name: str, error: str, args: dict) -> Optional[Dict]:
+        """Attempt automatic fix for known error patterns. Returns fixed args or None."""
+        error_lower = error.lower()
+        if tool_name == "run_command" and "not found" in error_lower:
+            # Try without docker if docker command not found
+            if "docker" in error_lower:
+                return {"command": args.get("command", ""), "use_docker": "false"}
+        if tool_name == "read_file" and ("no such file" in error_lower or "not found" in error_lower):
+            # Try common variations
+            fp = args.get("filepath", "")
+            alternatives = [fp + ".py", fp + ".js", fp + ".ts", fp.replace(".py", ".tsx")]
+            for alt in alternatives:
+                if os.path.exists(os.path.expanduser(alt)):
+                    return {"filepath": alt}
+        return None
+
 # ============== SELF-LEARNER ==============
 class SelfLearner:
     _recording = False; _recording_name = ""; _recording_description = ""; _action_log = []
     @classmethod
     def start_recording(cls, name: str, description: str):
         cls._recording = True; cls._recording_name = name; cls._recording_description = description
-        cls._action_log = []; print(f"🔴 Recording: '{name}'")
+        cls._action_log = []; print(f"Recording: '{name}'")
     @classmethod
     def record_action(cls, action_type: str, details: dict):
         if cls._recording:
@@ -552,7 +571,7 @@ Replace ALL concrete values with {{placeholders}}. Return ONLY markdown."""
             skill_md = f"---\nname: {cls._recording_name}\ndescription: {cls._recording_description}\n---\n{json.dumps(cls._action_log, indent=2)}"
         skill_path = SKILLS_DIR / f"{cls._recording_name}.md"
         skill_path.write_text(skill_md); cls._action_log = []
-        return f"✅ Skill saved: {skill_path}\n{skill_md}"
+        return f"Skill saved: {skill_path}\n{skill_md}"
     @classmethod
     def compose_workflow(cls, skill_names: List[str], goal: str, provider: str = "openai") -> str:
         """Chain multiple skills into a composed workflow."""
@@ -573,13 +592,261 @@ Create a NEW composed workflow that chains these skills together, reusing their 
         except Exception as e: return f"Compose failed: {e}"
         path = SKILLS_DIR / f"composed_{int(time.time())}.md"
         path.write_text(workflow)
-        return f"✅ Composed workflow saved: {path}\n{workflow}"
+        return f"Composed workflow saved: {path}\n{workflow}"
     @staticmethod
     def save_skill(name: str, description: str, workflow: list):
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         (SKILLS_DIR / f"{name}.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n{json.dumps(workflow, indent=2)}")
     @staticmethod
     def load_skills() -> list: return [f.stem for f in SKILLS_DIR.glob("*.md")]
+
+# ============== HOOKS / LIFECYCLE SYSTEM ==============
+class HookManager:
+    """Lifecycle hook system. Register callbacks for tool pre/post, LLM pre/post, etc."""
+    _hooks: Dict[str, List[Callable]] = {
+        "pre_tool": [], "post_tool": [], "pre_llm": [], "post_llm": [],
+        "pre_commit": [], "post_commit": [], "on_error": [], "on_start": [], "on_stop": [],
+    }
+
+    @classmethod
+    def register(cls, event: str, callback: Callable):
+        if event in cls._hooks:
+            cls._hooks[event].append(callback)
+
+    @classmethod
+    def unregister(cls, event: str, callback: Callable):
+        if event in cls._hooks and callback in cls._hooks[event]:
+            cls._hooks[event].remove(callback)
+
+    @classmethod
+    def fire(cls, event: str, **kwargs) -> List[Any]:
+        results = []
+        for cb in cls._hooks.get(event, []):
+            try:
+                result = cb(**kwargs) if kwargs else cb()
+                results.append(result)
+            except Exception as e:
+                print(f"Hook error ({event}): {e}")
+        return results
+
+    @classmethod
+    def list_hooks(cls) -> Dict[str, int]:
+        return {event: len(cbs) for event, cbs in cls._hooks.items()}
+
+# ============== CHECKPOINT SYSTEM ==============
+class CheckpointManager:
+    """Git-based checkpoint/rollback system."""
+
+    @staticmethod
+    def create_checkpoint(label: str = "") -> str:
+        """Create a git stash checkpoint."""
+        try:
+            # Stage everything
+            subprocess.run(["git", "add", "-A"], capture_output=True, text=True)
+            # Check if there's anything to stash
+            status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+            if not status.stdout.strip():
+                return "Nothing to checkpoint (clean working tree)"
+            # Create stash with label
+            tag = label or f"checkpoint-{int(time.time())}"
+            r = subprocess.run(["git", "stash", "push", "-m", tag], capture_output=True, text=True)
+            # Save checkpoint metadata
+            cp_dir = CHECKPOINTS_DIR / tag
+            cp_dir.mkdir(parents=True, exist_ok=True)
+            meta = {
+                "label": tag,
+                "timestamp": datetime.now().isoformat(),
+                "stash_output": r.stdout.strip(),
+                "files_changed": status.stdout.strip().count("\n") + (1 if status.stdout.strip() else 0),
+            }
+            (cp_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+            # Save diff snapshot
+            diff = subprocess.run(["git", "diff", "HEAD"], capture_output=True, text=True)
+            if diff.stdout:
+                (cp_dir / "snapshot.diff").write_text(diff.stdout)
+            return f"Checkpoint created: {tag} ({meta['files_changed']} files)"
+        except Exception as e: return f"Checkpoint error: {e}"
+
+    @staticmethod
+    def list_checkpoints() -> List[Dict]:
+        """List all checkpoints."""
+        checkpoints = []
+        for cp_dir in sorted(CHECKPOINTS_DIR.iterdir()):
+            if cp_dir.is_dir():
+                meta_file = cp_dir / "meta.json"
+                if meta_file.exists():
+                    meta = json.loads(meta_file.read_text())
+                    checkpoints.append(meta)
+        return checkpoints
+
+    @staticmethod
+    def restore_checkpoint(label: str) -> str:
+        """Restore a checkpoint by popping the stash."""
+        try:
+            r = subprocess.run(["git", "stash", "pop"], capture_output=True, text=True)
+            if r.returncode == 0:
+                return f"Restored checkpoint: {label}\n{r.stdout.strip()}"
+            else:
+                return f"Restore failed: {r.stderr.strip()}"
+        except Exception as e: return f"Restore error: {e}"
+
+    @staticmethod
+    def delete_checkpoint(label: str) -> str:
+        """Delete checkpoint metadata."""
+        cp_dir = CHECKPOINTS_DIR / label
+        if cp_dir.exists():
+            shutil.rmtree(cp_dir)
+            return f"Deleted checkpoint: {label}"
+        return f"Checkpoint not found: {label}"
+
+# ============== CODEBASE INDEXER ==============
+class CodebaseIndexer:
+    """Lightweight codebase indexing for semantic search. Uses file hashing + keyword matching."""
+
+    def __init__(self):
+        self.index: Dict[str, Dict] = {}  # filepath -> {hash, keywords, size, ext}
+        self.index_path = CHECKPOINTS_DIR / "codebase_index.json"
+        self._load_index()
+
+    def _load_index(self):
+        if self.index_path.exists():
+            try:
+                self.index = json.loads(self.index_path.read_text())
+            except: self.index = {}
+
+    def _save_index(self):
+        self.index_path.write_text(json.dumps(self.index, indent=2))
+
+    def _extract_keywords(self, content: str, ext: str) -> List[str]:
+        """Extract meaningful keywords from source code."""
+        keywords = set()
+        # Remove strings and comments for cleaner extraction
+        content_lower = content.lower()
+        # Extract function/class/variable names
+        patterns = [
+            r'def\s+(\w+)', r'class\s+(\w+)', r'function\s+(\w+)',
+            r'const\s+(\w+)', r'let\s+(\w+)', r'var\s+(\w+)',
+            r'import\s+.*from\s+["\']([^"\']+)', r'require\s*\(\s*["\']([^"\']+)',
+        ]
+        for pat in patterns:
+            for match in re.finditer(pat, content):
+                keywords.add(match.group(1).lower())
+        # Add common programming terms
+        for word in re.findall(r'\b[a-z_]\w{3,}\b', content_lower):
+            if word not in ('self', 'this', 'that', 'with', 'from', 'import', 'return', 'true', 'false', 'none'):
+                keywords.add(word)
+        return list(keywords)[:100]  # Cap at 100 keywords
+
+    def index_project(self, root_path: str = ".") -> str:
+        """Index all source files in the project."""
+        root = Path(root_path).resolve()
+        indexed = 0
+        skipped = 0
+        for f in root.rglob("*"):
+            if f.is_file() and f.suffix in ('.py', '.js', '.ts', '.tsx', '.jsx', '.go', '.rs', '.java', '.rb', '.php', '.c', '.cpp', '.h', '.md', '.json', '.yaml', '.yml', '.toml'):
+                if '.git' in f.parts or 'node_modules' in f.parts or '__pycache__' in f.parts:
+                    continue
+                try:
+                    rel = str(f.relative_to(root))
+                    content = f.read_text(errors='ignore')
+                    file_hash = hashlib.md5(content.encode()).hexdigest()
+                    # Check if changed
+                    if rel in self.index and self.index[rel].get('hash') == file_hash:
+                        skipped += 1
+                        continue
+                    keywords = self._extract_keywords(content, f.suffix)
+                    self.index[rel] = {
+                        'hash': file_hash,
+                        'keywords': keywords,
+                        'size': f.stat().st_size,
+                        'ext': f.suffix,
+                        'indexed_at': datetime.now().isoformat(),
+                    }
+                    indexed += 1
+                except: pass
+        self._save_index()
+        return f"Indexed {indexed} files, {skipped} unchanged. Total: {len(self.index)}"
+
+    def search(self, query: str, max_results: int = 10) -> List[Dict]:
+        """Search the index by keyword matching."""
+        query_lower = query.lower()
+        query_words = set(re.findall(r'\b\w+\b', query_lower))
+        results = []
+        for filepath, meta in self.index.items():
+            score = 0
+            keywords = set(meta.get('keywords', []))
+            # Exact filename match
+            if query_lower in filepath.lower():
+                score += 10
+            # Keyword overlap
+            overlap = query_words & keywords
+            score += len(overlap) * 2
+            # Partial matches
+            for qw in query_words:
+                for kw in keywords:
+                    if qw in kw or kw in qw:
+                        score += 1
+            if score > 0:
+                results.append({"path": filepath, "score": score, "ext": meta.get('ext', ''), "size": meta.get('size', 0)})
+        results.sort(key=lambda x: x['score'], reverse=True)
+        return results[:max_results]
+
+    def get_stats(self) -> Dict:
+        """Get index statistics."""
+        exts = {}
+        for meta in self.index.values():
+            ext = meta.get('ext', 'unknown')
+            exts[ext] = exts.get(ext, 0) + 1
+        return {"total_files": len(self.index), "by_extension": exts}
+
+# ============== SAFETY MANAGER ==============
+class SafetyManager:
+    """Plan/Act gate for autonomous operations."""
+
+    def __init__(self, mode: str = "suggest"):
+        self.mode = mode  # suggest, plan, auto
+        self._pending_approvals: Dict[str, Dict] = {}
+
+    def should_approve(self, tool_name: str, args: dict) -> Tuple[bool, str]:
+        """Check if tool execution needs user approval."""
+        if self.mode == "auto":
+            return True, "auto-mode"
+
+        # Always allow read-only tools
+        READ_ONLY = {"read_file", "list_files", "search_code", "git_status", "git_log",
+                      "git_diff_preview", "map_repo", "get_time", "lsp_diagnostics",
+                      "web_search", "web_fetch", "test_provider", "list_providers"}
+        if tool_name in READ_ONLY:
+            return True, "read-only"
+
+        # Destructive tools need approval in suggest/plan mode
+        DESTRUCTIVE = {"write_file", "edit_file_line", "append_file", "run_command",
+                       "docker_execute", "git_commit", "git_push", "git_undo"}
+        if tool_name in DESTRUCTIVE and self.mode in ("suggest", "plan"):
+            approval_id = f"appr-{int(time.time()*1000)}"
+            self._pending_approvals[approval_id] = {
+                "tool": tool_name, "args": args,
+                "timestamp": datetime.now().isoformat(), "status": "pending"
+            }
+            return False, approval_id
+
+        return True, "allowed"
+
+    def approve(self, approval_id: str) -> bool:
+        if approval_id in self._pending_approvals:
+            self._pending_approvals[approval_id]["status"] = "approved"
+            return True
+        return False
+
+    def deny(self, approval_id: str) -> bool:
+        if approval_id in self._pending_approvals:
+            self._pending_approvals[approval_id]["status"] = "denied"
+            del self._pending_approvals[approval_id]
+            return True
+        return False
+
+    def get_pending(self) -> List[Dict]:
+        return [{"id": k, **v} for k, v in self._pending_approvals.items() if v["status"] == "pending"]
 
 # ============== PROVIDERS ==============
 PROVIDER_CONFIGS = {
@@ -619,6 +886,88 @@ def _get_provider_client(provider: str = None):
     return ClientClass(api_key=api_key) if api_key else ClientClass()
 
 class ProviderRouter:
+    @staticmethod
+    def call(messages: List[Dict], tools_schemas: List[Dict], provider: str = None):
+        """Non-streaming call. Returns response object with .content and .tool_calls."""
+        provider = provider or LLM_PROVIDER
+        cfg = PROVIDER_CONFIGS.get(provider)
+        if not cfg: raise ValueError(f"Unsupported provider: {provider}")
+        model = os.getenv("MODEL_NAME", cfg.get("default_model", "gpt-4o-mini"))
+        api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
+        base = cfg.get("base")
+
+        if cfg.get("lib") == "openai":
+            import openai
+            client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
+            om = []
+            for m in messages:
+                if m["role"] == "system": om.append({"role": "system", "content": m["content"]})
+                elif m["role"] == "user": om.append({"role": "user", "content": m.get("content","")})
+                elif m["role"] == "assistant": om.append({"role": "assistant", "content": m.get("content","")})
+                elif m["role"] == "tool": om.append({"role": "tool", "tool_call_id": m.get("tool_call_id",""), "content": m["content"]})
+            resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None)
+            _track_cost(provider, resp.usage.prompt_tokens, resp.usage.completion_tokens)
+            return resp.choices[0].message
+
+        elif cfg.get("lib") == "anthropic":
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            system = next((m["content"] for m in messages if m["role"] == "system"), "")
+            cm = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] in ["user","assistant"]]
+            an_tools = [{"name": t["function"]["name"], "description": t["function"]["description"], "input_schema": t["function"]["parameters"]} for t in tools_schemas]
+            resp = client.messages.create(model=model, system=system, messages=cm, tools=an_tools, max_tokens=4096)
+            _track_cost(provider, resp.usage.input_tokens, resp.usage.output_tokens)
+            # Convert to OpenAI-like response
+            content_text = ""
+            tool_calls = []
+            for block in resp.content:
+                if hasattr(block, "type") and block.type == "text":
+                    content_text += block.text
+                elif hasattr(block, "type") and block.type == "tool_use":
+                    tool_calls.append(type('ToolCall', (), {
+                        'id': block.id,
+                        'function': type('Function', (), {
+                            'name': block.name,
+                            'arguments': json.dumps(block.input)
+                        })()
+                    })())
+            result = type('Response', (), {'content': content_text, 'tool_calls': tool_calls})()
+            return result
+
+        elif cfg.get("lib") == "google.generativeai":
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            gen_model = genai.GenerativeModel(model)
+            system = next((m["content"] for m in messages if m["role"] == "system"), "")
+            history = []
+            for m in messages:
+                if m["role"] == "system": continue
+                history.append({"role": "model" if m["role"] == "assistant" else "user", "parts": [m.get("content", "")]})
+            chat = gen_model.start_chat(history=history[:-1] if history else [])
+            last_msg = history[-1]["parts"][0] if history else "Hello"
+            resp = chat.send_message(last_msg)
+            text = resp.text if hasattr(resp, "text") else ""
+            usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            if hasattr(resp, "usage_metadata"):
+                usage = {
+                    "prompt_tokens": getattr(resp.usage_metadata, "prompt_token_count", 0),
+                    "completion_tokens": getattr(resp.usage_metadata, "candidates_token_count", 0),
+                }
+            _track_cost(provider, usage["prompt_tokens"], usage["completion_tokens"])
+            return type('Response', (), {'content': text, 'tool_calls': []})()
+
+        else:
+            # Generic OpenAI-compatible fallback
+            try:
+                import openai
+                client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
+                om = [{"role": m["role"], "content": m.get("content","")} for m in messages if m["role"] in ("system","user","assistant")]
+                resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None)
+                _track_cost(provider, resp.usage.prompt_tokens, resp.usage.completion_tokens)
+                return resp.choices[0].message
+            except Exception as e:
+                raise ValueError(f"Provider {provider} failed: {e}")
+
     @staticmethod
     def call_stream(messages: List[Dict], tools_schemas: List[Dict], provider: str = None):
         """Streaming variant: yields (chunk_text, tool_calls_or_None, usage_dict)."""
@@ -725,7 +1074,7 @@ class ProviderRouter:
             yield None, StreamResult(), usage
 
         else:
-            # Fallback: non-streaming
+            # Generic fallback: use non-streaming call
             result = ProviderRouter.call(messages, tools_schemas, provider)
             yield None, result, {}
 
@@ -789,7 +1138,7 @@ class KanbanBoard:
             now = datetime.now()
             for w in self.workers:
                 if (now - w.last_heartbeat).total_seconds() > 30 and w.status == "working":
-                    print(f"⚠️ Zombie worker: {w.name}")
+                    print(f"Zombie worker: {w.name}")
                     if w.current_task:
                         t = w.current_task; t.status = "todo"; t.retries += 1
                         if t.retries > t.max_retries: t.status = "done"
@@ -932,10 +1281,10 @@ class PluginMarketplace:
             manifest = target_dir / "plugin.json"
             if manifest.exists():
                 data = json.loads(manifest.read_text())
-                return f"✅ Installed plugin '{data.get('name', target_name)}' v{data.get('version', '0')}"
-            return f"⚠️ Extracted to {target_dir} but no plugin.json found"
+                return f"Installed plugin '{data.get('name', target_name)}' v{data.get('version', '0')}"
+            return f"Extracted to {target_dir} but no plugin.json found"
         except Exception as e:
-            return f"❌ Install failed: {e}"
+            return f"Install failed: {e}"
 
     @staticmethod
     def list_remote() -> List[Dict]:
@@ -973,8 +1322,14 @@ class WebSocketServer:
                 data = json.loads(message)
                 msg_type = data.get("type", "chat")
                 if msg_type == "chat":
+                    # Safety check
+                    approved, reason = self.agent.safety.should_approve("chat", data)
+                    if not approved:
+                        await websocket.send(json.dumps({"type":"approval_needed","id":reason,"tool":"chat","args":data}))
+                        continue
                     # Streaming chat
                     self.agent.messages.append({"role":"user","content":data["text"]})
+                    HookManager.fire("pre_llm", messages=self.agent.messages)
                     schemas = self.agent.registry.get_openai_schemas()
                     content_parts = []
                     tool_calls = []
@@ -985,6 +1340,7 @@ class WebSocketServer:
                         if result:
                             content_parts = [result.content or ""]
                             tool_calls = result.tool_calls
+                    HookManager.fire("post_llm", content="".join(content_parts), tool_calls=tool_calls)
                     full_content = "".join(content_parts)
                     self.agent.messages.append({"role":"assistant","content":full_content})
                     if tool_calls:
@@ -992,16 +1348,35 @@ class WebSocketServer:
                         for tc in tool_calls:
                             f = tc.get("function", tc) if isinstance(tc, dict) else getattr(tc, "function", tc)
                             calls.append({"id": tc.get("id","") if isinstance(tc,dict) else getattr(tc,"id",""), "name": f.get("name","") if isinstance(f,dict) else getattr(f,"name",""), "args": json.loads(f.get("arguments","{}") if isinstance(f,dict) else getattr(f,"arguments","{}"))})
-                        results = self.agent.registry.execute_parallel(calls)
-                        for res in results:
-                            self.agent.messages.append({"role":"tool","tool_call_id":res["id"],"content":res["result"]})
-                        # Run another LLM iteration with tool results
-                        for chunk_text, result2, _ in ProviderRouter.call_stream(self.agent.messages, schemas, self.agent.provider):
-                            if chunk_text:
-                                await websocket.send(json.dumps({"type":"token", "content":chunk_text}))
-                            if result2:
-                                full_content = result2.content or ""
-                        self.agent.messages.append({"role":"assistant","content":full_content})
+                        # Safety check for each tool call
+                        approved_calls = []
+                        for call in calls:
+                            ok, reason = self.agent.safety.should_approve(call["name"], call["args"])
+                            if ok:
+                                approved_calls.append(call)
+                            else:
+                                await websocket.send(json.dumps({"type":"approval_needed","id":reason,"tool":call["name"],"args":call["args"]}))
+                        if approved_calls:
+                            HookManager.fire("pre_tool", calls=approved_calls)
+                            results = self.agent.registry.execute_parallel(approved_calls)
+                            HookManager.fire("post_tool", results=results)
+                            for res in results:
+                                self.agent.messages.append({"role":"tool","tool_call_id":res["id"],"content":res["result"]})
+                            # Auto-heal on tool errors
+                            for res in results:
+                                if "Error" in res["result"] or "ToolError" in res["result"]:
+                                    for c in approved_calls:
+                                        if c["id"] == res["id"]:
+                                            fix = SelfHealer.auto_fix(c["name"], res["result"], c["args"])
+                                            if fix:
+                                                self.agent.logs.append({"type":"auto_fix", "tool": c["name"], "fix": fix})
+                            # Run another LLM iteration with tool results
+                            for chunk_text, result2, _ in ProviderRouter.call_stream(self.agent.messages, schemas, self.agent.provider):
+                                if chunk_text:
+                                    await websocket.send(json.dumps({"type":"token", "content":chunk_text}))
+                                if result2:
+                                    full_content = result2.content or ""
+                            self.agent.messages.append({"role":"assistant","content":full_content})
                     self.agent.store.save(self.agent.session_id, self.agent.messages)
                     await websocket.send(json.dumps({"type":"response","content":full_content,"toolCalls":[{"name":c["name"],"args":c["args"]} for c in tool_calls] if tool_calls else []}))
                 elif msg_type == "command":
@@ -1101,12 +1476,61 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"git_log", "data":result}))
                     elif cmd.startswith("approve:"):
                         wid = cmd.split(":", 1)[1]
-                        result = registry.execute("confirm_write", {"write_id": wid})
-                        await websocket.send(json.dumps({"type":"notification", "content":result}))
+                        if self.agent.safety.approve(wid):
+                            await websocket.send(json.dumps({"type":"notification", "content":"Approved"}))
+                        else:
+                            result = registry.execute("confirm_write", {"write_id": wid})
+                            await websocket.send(json.dumps({"type":"notification", "content":result}))
                     elif cmd.startswith("deny:"):
                         wid = cmd.split(":", 1)[1]
-                        result = registry.execute("deny_write", {"write_id": wid})
+                        if self.agent.safety.deny(wid):
+                            await websocket.send(json.dumps({"type":"notification", "content":"Denied"}))
+                        else:
+                            result = registry.execute("deny_write", {"write_id": wid})
+                            await websocket.send(json.dumps({"type":"notification", "content":result}))
+                    elif cmd == "hooks":
+                        await websocket.send(json.dumps({"type":"hooks", "data":HookManager.list_hooks()}))
+                    elif cmd.startswith("hook:register:"):
+                        parts = cmd.split(":", 2)
+                        event = parts[1]
+                        HookManager.register(event, lambda: None)
+                        await websocket.send(json.dumps({"type":"notification", "content":f"Registered hook for {event}"}))
+                    elif cmd == "checkpoints":
+                        cps = CheckpointManager.list_checkpoints()
+                        await websocket.send(json.dumps({"type":"checkpoints", "data":cps}))
+                    elif cmd.startswith("checkpoint:create:"):
+                        label = cmd.split(":", 2)[2] if len(cmd.split(":")) > 2 else ""
+                        result = CheckpointManager.create_checkpoint(label)
                         await websocket.send(json.dumps({"type":"notification", "content":result}))
+                    elif cmd.startswith("checkpoint:restore:"):
+                        label = cmd.split(":", 2)[2]
+                        result = CheckpointManager.restore_checkpoint(label)
+                        await websocket.send(json.dumps({"type":"notification", "content":result}))
+                    elif cmd.startswith("checkpoint:delete:"):
+                        label = cmd.split(":", 2)[2]
+                        result = CheckpointManager.delete_checkpoint(label)
+                        await websocket.send(json.dumps({"type":"notification", "content":result}))
+                    elif cmd == "index":
+                        result = self.agent.indexer.index_project()
+                        await websocket.send(json.dumps({"type":"notification", "content":result}))
+                    elif cmd.startswith("search:"):
+                        query = cmd.split(":", 1)[1]
+                        results = self.agent.indexer.search(query)
+                        await websocket.send(json.dumps({"type":"search_results", "data":results}))
+                    elif cmd == "index:stats":
+                        stats = self.agent.indexer.get_stats()
+                        await websocket.send(json.dumps({"type":"index_stats", "data":stats}))
+                    elif cmd.startswith("safety:mode:"):
+                        mode = cmd.split(":", 2)[2]
+                        self.agent.safety.mode = mode
+                        await websocket.send(json.dumps({"type":"safety_mode", "data":mode}))
+                    elif cmd == "safety:pending":
+                        pending = self.agent.safety.get_pending()
+                        await websocket.send(json.dumps({"type":"safety_pending", "data":pending}))
+                    elif cmd.startswith("model:"):
+                        model = cmd.split(":", 1)[1]
+                        os.environ["MODEL_NAME"] = model
+                        await websocket.send(json.dumps({"type":"model", "data":model}))
                     # Send any streamed lines
                     stream = _drain_stream()
                     if stream:
@@ -1124,7 +1548,7 @@ class WebSocketServer:
                     await asyncio.gather(*(c.send(msg) for c in self.clients), return_exceptions=True)
         asyncio.ensure_future(_stream_pusher())
         async with websockets.serve(self.handler, WS_HOST, WS_PORT):
-            print(f"🌐 WebSocket server on ws://{WS_HOST}:{WS_PORT}")
+            print(f"WebSocket server on ws://{WS_HOST}:{WS_PORT}")
             await asyncio.Future()
 
 # ============== ULTIMATE AGENT ==============
@@ -1136,6 +1560,9 @@ class UltimateAgent:
         self.browser = AdvancedBrowser(); self.desktop = DesktopController()
         self.provider = LLM_PROVIDER
         self.logs: List[Dict] = []
+        self.safety = SafetyManager(SAFETY_MODE)
+        self.checkpoints = CheckpointManager()
+        self.indexer = CodebaseIndexer()
         skills = SelfLearner.load_skills()
         skills_str = f"\nAvailable skills: {', '.join(skills)}" if skills else ""
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. Be concise and self-correcting.{skills_str}"
@@ -1182,6 +1609,22 @@ class UltimateAgent:
         def list_providers() -> str: return ", ".join(PROVIDER_CONFIGS.keys())
         @self.registry.register(description="Show kanban board")
         def show_kanban() -> str: return json.dumps(self.kanban.get_board_state(), indent=2)
+        @self.registry.register(description="Create a checkpoint of current changes")
+        def create_checkpoint(label: str = "") -> str: return self.checkpoints.create_checkpoint(label)
+        @self.registry.register(description="List all checkpoints")
+        def list_checkpoints() -> str: return json.dumps(self.checkpoints.list_checkpoints(), indent=2)
+        @self.registry.register(description="Restore a checkpoint by label")
+        def restore_checkpoint(label: str) -> str: return self.checkpoints.restore_checkpoint(label)
+        @self.registry.register(description="Index the codebase for semantic search")
+        def index_codebase(path: str = ".") -> str: return self.indexer.index_project(path)
+        @self.registry.register(description="Search the codebase index")
+        def search_index(query: str) -> str: return json.dumps(self.indexer.search(query), indent=2)
+        @self.registry.register(description="Analyze an error and suggest fixes")
+        def analyze_error(error: str, context: str = "") -> str: return SelfHealer.analyze_error(error, context)
+        @self.registry.register(description="Set safety mode: suggest, plan, or auto")
+        def set_safety_mode(mode: str) -> str:
+            self.safety.mode = mode
+            return f"Safety mode set to: {mode}"
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -1189,60 +1632,90 @@ class UltimateAgent:
             user_content = self.messages[-1].get("content", "") if self.messages[-1]["role"] == "user" else ""
             if len(user_content) > 20 and _check_prompt_injection(user_content):
                 self.logs.append({"type": "security_warning", "message": "Possible prompt injection detected"})
+                return "Blocked: possible prompt injection detected."
         self.logs.append({"type": "run_start", "timestamp": time.time(), "iterations": 0})
+        HookManager.fire("on_start")
         for i in range(max_iters):
             self.logs.append({"type": "llm_call", "iteration": i, "timestamp": time.time()})
+            HookManager.fire("pre_llm", messages=self.messages)
             schemas = self.registry.get_openai_schemas()
             try: response = ProviderRouter.call(self.messages, schemas, self.provider)
-            except Exception as e: return f"LLM Error: {e}"
+            except Exception as e:
+                HookManager.fire("on_error", error=str(e))
+                return f"LLM Error: {e}"
             self.messages.append({"role": "assistant", "content": response.content or ""})
+            HookManager.fire("post_llm", content=response.content, tool_calls=getattr(response, "tool_calls", []))
             tcs = getattr(response, "tool_calls", [])
             if not tcs:
                 self.logs.append({"type": "llm_response", "iteration": i, "content": (response.content or "")[:200]})
+                HookManager.fire("on_stop")
                 return response.content or "No response"
             calls = []
             for tc in tcs:
                 f = tc.function if hasattr(tc, "function") else tc["function"]
                 calls.append({"id": tc.id if hasattr(tc,"id") else tc["id"], "name": f.name if hasattr(f,"name") else f["name"], "args": json.loads(f.arguments if hasattr(f,"arguments") else f["arguments"])})
-            results = self.registry.execute_parallel(calls)
-            for c in calls:
+            # Safety check
+            approved_calls = []
+            for call in calls:
+                ok, reason = self.safety.should_approve(call["name"], call["args"])
+                if ok:
+                    approved_calls.append(call)
+                else:
+                    self.logs.append({"type": "approval_needed", "id": reason, "tool": call["name"]})
+            if not approved_calls:
+                return "All tool calls require approval. Use suggest mode or approve via WS."
+            HookManager.fire("pre_tool", calls=approved_calls)
+            results = self.registry.execute_parallel(approved_calls)
+            HookManager.fire("post_tool", results=results)
+            for c in approved_calls:
                 self.logs.append({"type": "tool_call", "name": c["name"], "args": c["args"], "iteration": i, "timestamp": time.time()})
             for res in results:
                 self.logs.append({"type": "tool_result", "id": res["id"], "result": res["result"][:200], "iteration": i, "timestamp": time.time()})
+                # Auto-heal on errors
+                if "Error" in res["result"] or "ToolError" in res["result"]:
+                    for c in approved_calls:
+                        if c["id"] == res["id"]:
+                            fix = SelfHealer.auto_fix(c["name"], res["result"], c["args"])
+                            if fix:
+                                self.logs.append({"type": "auto_fix", "tool": c["name"], "fix": fix})
             if SelfLearner._recording:
                 for res in results:
-                    for c in calls:
+                    for c in approved_calls:
                         if c["id"] == res["id"]: SelfLearner.record_action(c["name"], c["args"]); break
             for res in results:
                 self.messages.append({"role": "tool", "tool_call_id": res["id"], "content": res["result"]})
-            if self.goal_manager and self.goal_manager.is_complete(response.content or ""): return f"Goal Complete: {self.goal_manager.goal}"
+            if self.goal_manager and self.goal_manager.is_complete(response.content or ""):
+                HookManager.fire("on_stop")
+                return f"Goal Complete: {self.goal_manager.goal}"
+        HookManager.fire("on_stop")
         return "Max iterations reached."
     def chat(self):
         import uuid
         sid = self.session_id
-        print(f"🤖 Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
-        print(f"🔧 Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
-        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, exit\n")
+        print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
+        print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
+        print(f"Safety mode: {self.safety.mode}")
+        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, exit\n")
         while True:
             try: u = input("You: ").strip()
             except (EOFError, KeyboardInterrupt): break
             if not u: continue
             if u == "exit": break
             if u == "/reset":
-                self.messages = [{"role":"system","content":self.system_prompt}]; print("🧹 Reset."); continue
+                self.messages = [{"role":"system","content":self.system_prompt}]; print("Reset."); continue
             if u.startswith("/provider"):
                 p = u.split(" ", 1)[1] if " " in u else ""
-                if p in PROVIDER_CONFIGS: self.provider = p; print(f"✅ Switched to {p}")
+                if p in PROVIDER_CONFIGS: self.provider = p; print(f"Switched to {p}")
                 else: print(f"Available: {', '.join(PROVIDER_CONFIGS.keys())}")
                 continue
             if u.startswith("/kanban"):
                 parts = u.split()
-                if len(parts) >= 3 and parts[1]=="add": t=self.kanban.add_task(parts[2]); print(f"✅ {t.id}"); continue
+                if len(parts) >= 3 and parts[1]=="add": t=self.kanban.add_task(parts[2]); print(f"{t.id}"); continue
                 if len(parts)>=2 and parts[1]=="show": print(json.dumps(self.kanban.get_board_state(), indent=2)); continue
             if u.startswith("/goal"):
                 self.goal_manager = GoalManager(u.split(" ",1)[1])
                 result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":f"Goal: {self.goal_manager.goal}. Work until COMPLETE."}])
-                print(f"\n🤖 {result}\n"); continue
+                print(f"\n{result}\n"); continue
             if u.startswith("/multitask"):
                 rest = u.split(" ",1)[1] if " " in u else ""
                 tasks = [{"name":f"T-{i}","prompt":t.strip()} for i,t in enumerate(rest.split(",") if "," in rest else rest.split("|"))]
@@ -1256,7 +1729,7 @@ class UltimateAgent:
                 print(DesktopController.open_app(u.split("open ",1)[1])); continue
             if u.startswith("/record"):
                 parts = u.split(" ",2)
-                if len(parts)>=3: SelfLearner.start_recording(parts[1], parts[2]); print(f"🔴 Recording '{parts[1]}'"); continue
+                if len(parts)>=3: SelfLearner.start_recording(parts[1], parts[2]); print(f"Recording '{parts[1]}'"); continue
                 else: print("Usage: /record <name> <desc>"); continue
             if u == "/stop_record": print(SelfLearner.stop_recording(self.provider)); continue
             if u.startswith("/compose"):
@@ -1264,8 +1737,28 @@ class UltimateAgent:
                 if len(rest)>=3:
                     names = [s.strip() for s in rest[1].split(",")]
                     print(SelfLearner.compose_workflow(names, rest[2], self.provider)); continue
+            if u.startswith("/checkpoint"):
+                parts = u.split()
+                if len(parts) >= 2 and parts[1] == "create":
+                    label = parts[2] if len(parts) > 2 else ""
+                    print(self.checkpoints.create_checkpoint(label)); continue
+                if len(parts) >= 2 and parts[1] == "list":
+                    print(json.dumps(self.checkpoints.list_checkpoints(), indent=2)); continue
+                if len(parts) >= 3 and parts[1] == "restore":
+                    print(self.checkpoints.restore_checkpoint(parts[2])); continue
+            if u.startswith("/index"):
+                print(self.indexer.index_project()); continue
+            if u.startswith("/search"):
+                query = u.split(" ", 1)[1] if " " in u else ""
+                print(json.dumps(self.indexer.search(query), indent=2)); continue
+            if u.startswith("/safety"):
+                parts = u.split()
+                if len(parts) >= 2:
+                    self.safety.mode = parts[1]
+                    print(f"Safety mode: {self.safety.mode}"); continue
+                print(f"Current safety mode: {self.safety.mode}"); continue
             result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":u}])
-            print(f"\n🤖 {result}\n")
+            print(f"\n{result}\n")
 
 async def run_ws_server(agent):
     ws = WebSocketServer(agent)
