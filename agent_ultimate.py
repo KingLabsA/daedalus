@@ -603,6 +603,123 @@ def deny_write(write_id: str) -> str:
         return f"Denied write {write_id}"
     return f"No pending write with id {write_id}"
 
+
+_bg_processes: Dict[str, subprocess.Popen] = {}
+_bg_output: Dict[str, list] = {}
+_bg_counter = 0
+
+@registry.register(description="Run a command in the background. Returns a process ID for polling/killing.")
+def background_process(command: str, workdir: str = "") -> str:
+    global _bg_counter
+    _bg_counter += 1
+    pid = f"bg-{_bg_counter}"
+    try:
+        proc = subprocess.Popen(
+            command, shell=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, cwd=workdir or None
+        )
+        _bg_processes[pid] = proc
+        _bg_output[pid] = []
+        def _reader():
+            for line in proc.stdout:
+                _bg_output[pid].append(line.rstrip("\n"))
+        threading.Thread(target=_reader, daemon=True).start()
+        return f"Started background process {pid}: {command}"
+    except Exception as e:
+        return f"Error starting background process: {e}"
+
+@registry.register(description="Get output from a background process. Pass pid from background_process.")
+def poll_process(pid: str) -> str:
+    if pid not in _bg_processes:
+        return f"Unknown process: {pid}"
+    proc = _bg_processes[pid]
+    output = "\n".join(_bg_output.get(pid, []))
+    if proc.poll() is not None:
+        del _bg_processes[pid]
+        return f"{output}\n[exited with code {proc.returncode}]" if output else f"[exited with code {proc.returncode}]"
+    return output if output else f"[running, no output yet]"
+
+@registry.register(description="Kill a background process by its pid.")
+def kill_process(pid: str) -> str:
+    if pid not in _bg_processes:
+        return f"Unknown process: {pid}"
+    proc = _bg_processes[pid]
+    proc.terminate()
+    del _bg_processes[pid]
+    return f"Terminated process {pid}"
+
+@registry.register(description="Run project linter and tests. Auto-detects Python (ruff+pytest) or Node (eslint+test).")
+def lint_and_test(path: str = ".") -> str:
+    results = []
+    p = Path(path)
+    py_files = list(p.rglob("*.py"))[:5]
+    if py_files or (p / "pyproject.toml").exists():
+        try:
+            ruff = subprocess.run(["ruff", "check", str(p)], capture_output=True, text=True, timeout=30)
+            results.append(f"ruff: {"PASS" if ruff.returncode == 0 else "FAIL"}\n{ruff.stdout.strip()[:500]}")
+        except FileNotFoundError:
+            results.append("ruff: NOT INSTALLED")
+        try:
+            pytest_r = subprocess.run(["python", "-m", "pytest", str(p), "-x", "-q"], capture_output=True, text=True, timeout=60)
+            results.append(f"pytest: {"PASS" if pytest_r.returncode == 0 else "FAIL"}\n{pytest_r.stdout.strip()[:500]}")
+        except Exception as e:
+            results.append(f"pytest: ERROR {e}")
+    js_files = list(p.rglob("*.ts")) + list(p.rglob("*.tsx")) + list(p.rglob("*.js"))
+    if js_files and (p / "package.json").exists():
+        try:
+            eslint = subprocess.run(["npx", "eslint", str(p)], capture_output=True, text=True, timeout=30)
+            results.append(f"eslint: {"PASS" if eslint.returncode == 0 else "FAIL"}\n{eslint.stdout.strip()[:500]}")
+        except Exception:
+            results.append("eslint: NOT AVAILABLE")
+        try:
+            npm_test = subprocess.run(["npm", "test"], capture_output=True, text=True, timeout=60, cwd=str(p))
+            results.append(f"npm test: {"PASS" if npm_test.returncode == 0 else "FAIL"}\n{npm_test.stdout.strip()[:500]}")
+        except Exception:
+            results.append("npm test: NOT AVAILABLE")
+    return "\n\n".join(results) if results else f"No lint/test config found at {path}"
+
+@registry.register(description="Kanban task board tool. Actions: list, add, move, remove.")
+def task_board(action: str = "list", task_name: str = "", column: str = "") -> str:
+    board = KanbanBoard()
+    if action == "list":
+        return json.dumps(board.get_board_state(), indent=1)
+    elif action == "add" and task_name:
+        task = board.add_task(task_name)
+        return f"Added task: {task.id} - {task.title}"
+    elif action == "move" and task_name:
+        board.move_task(task_name, column or "done")
+        return f"Moved task {task_name} to {column or "done"}"
+    elif action == "remove" and task_name:
+        board.remove_task(task_name)
+        return f"Removed task: {task_name}"
+    return f"Unknown task action: {action}"
+
+@registry.register(description="Map repository structure: functions, classes, imports per file. Returns JSON symbol index.")
+def repo_map(path: str = ".") -> str:
+    symbols = {}
+    p = Path(path)
+    count = 0
+    for f in sorted(p.rglob("*.py")):
+        if count >= 500 or ".git" in str(f) or "node_modules" in str(f):
+            break
+        try:
+            content_f = f.read_text()[:10000]
+            syms = {"functions": [], "classes": [], "imports": []}
+            for line in content_f.split("\n"):
+                stripped = line.strip()
+                if stripped.startswith("def "):
+                    syms["functions"].append(stripped.split("(")[0].replace("def ", ""))
+                elif stripped.startswith("class "):
+                    syms["classes"].append(stripped.split("(")[0].split(":")[0].replace("class ", ""))
+                elif stripped.startswith("import ") or stripped.startswith("from "):
+                    syms["imports"].append(stripped[:80])
+            if any(syms.values()):
+                symbols[str(f.relative_to(p))] = syms
+                count += 1
+        except: pass
+    return json.dumps(symbols, indent=1)[:10000]
+
 # Config file loader
 HERMES_CONFIG_PATH = ".hermes.json"
 def _load_config() -> dict:
@@ -1811,6 +1928,32 @@ class WebSocketServer:
                         code = cmd.split(":", 1)[1]
                         result = registry.execute("refactor_code", {"code": code})
                         await websocket.send(json.dumps({"type":"refactor","data":result}))
+                    elif cmd.startswith("bg:start:"):
+                        command = cmd.split(":", 2)[2]
+                        result = registry.execute("background_process", {"command": command})
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd.startswith("bg:poll:"):
+                        pid = cmd.split(":", 2)[2]
+                        result = registry.execute("poll_process", {"pid": pid})
+                        await websocket.send(json.dumps({"type":"bg_output","data":result}))
+                    elif cmd.startswith("bg:kill:"):
+                        pid = cmd.split(":", 2)[2]
+                        result = registry.execute("kill_process", {"pid": pid})
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd.startswith("lint:"):
+                        path_arg = cmd.split(":", 1)[1] if ":" in cmd else "."
+                        result = registry.execute("lint_and_test", {"path": path_arg})
+                        await websocket.send(json.dumps({"type":"lint_results","data":result}))
+                    elif cmd.startswith("task:"):
+                        parts = cmd.split(":", 2)
+                        action = parts[1] if len(parts) > 1 else "list"
+                        arg = parts[2] if len(parts) > 2 else ""
+                        result = registry.execute("task_board", {"action": action, "task_name": arg})
+                        await websocket.send(json.dumps({"type":"task_board","data":result}))
+                    elif cmd.startswith("repo:map"):
+                        path_arg = cmd.split(":", 2)[2] if cmd.count(":") >= 2 else "."
+                        result = registry.execute("repo_map", {"path": path_arg})
+                        await websocket.send(json.dumps({"type":"repo_map","data":result}))
                     # Send any streamed lines
                     stream = _drain_stream()
                     if stream:

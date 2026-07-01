@@ -93,6 +93,13 @@ async def main():
             await test_cmd(ws, "refactor:def f():\n  if True:\n    if True:\n      pass", "refactor", "refactor_code")
             await test_cmd(ws, "kanban:add:e2e-task", "kanban", "kanban_add")
             await test_cmd(ws, "kanban", "kanban", "kanban_after_add")
+            # New tool E2E tests
+            await test_cmd(ws, "bg:start:echo bg-test-ok", "notification", "bg_start")
+            await asyncio.sleep(0.5)
+            await test_cmd(ws, "lint:.", "lint_results", "lint_run", timeout=30)
+            await test_cmd(ws, "task:list", "task_board", "task_list")
+            await test_cmd(ws, "task:add:e2e-ws-task", "task_board", "task_add")
+            await test_cmd(ws, "repo:map:.", "repo_map", "repo_map", timeout=15)
             await test_cmd(ws, "system_prompt", "system_prompt", "sys_prompt")
             await test_cmd(ws, "session:save", "notification", "session_save")
     except Exception as e:
