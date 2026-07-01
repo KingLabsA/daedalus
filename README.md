@@ -1,6 +1,6 @@
 # Hermes Ultimate
 
-A production-grade autonomous coding agent with 20+ providers, self-learning, kanban orchestration, plugin marketplace, Docker sandboxing, safety modes, codebase indexing, git checkpoints, lifecycle hooks, and a standalone Tauri 2 desktop app.
+A production-grade autonomous coding agent with 21 providers, 55 tools, self-learning, kanban orchestration, plugin marketplace, Docker sandboxing, safety modes, codebase indexing, git checkpoints, lifecycle hooks, and a standalone Tauri 2 desktop app.
 
 ## Quick Start
 
@@ -28,6 +28,22 @@ npm run tauri dev
 ```
 
 The desktop app spawns the agent in WebSocket mode automatically. The React frontend connects to `ws://127.0.0.1:8765` to communicate with the agent.
+
+> **Known Issue:** Tauri 2.11.x (tao 0.35.3) panics on macOS 26 Tahoe — upstream bug [tauri-apps/tao#1171](https://github.com/tauri-apps/tao/issues/1171). Use the browser fallback until fixed.
+
+### Browser Fallback (Recommended)
+
+The frontend works standalone in a browser — no Tauri needed:
+
+```bash
+# Terminal 1: Start the agent
+python agent_ultimate.py ws
+
+# Terminal 2: Start the frontend dev server
+cd desktop && npm run dev
+# Open http://localhost:5173
+```
+
 
 ### Desktop Features
 - **Chat** — Full message log with user/assistant bubbles, tool call badges, Cmd+Enter to send
@@ -139,6 +155,7 @@ The agent exposes a JSON WebSocket interface on `ws://127.0.0.1:8765`:
 | `kanban:move:<id>:<col>` | Move task to column |
 | `kanban:remove:<id>` | Remove task |
 | `provider:<name>` | Switch provider |
+| `models` | List available models for current provider |
 | `model:<name>` | Switch model |
 | `safety:mode:<mode>` | Set safety mode |
 | `safety:status` | Get safety mode |
@@ -151,6 +168,9 @@ The agent exposes a JSON WebSocket interface on `ws://127.0.0.1:8765`:
 | `index:search:<query>` | Search index |
 | `cost` | Get cost summary |
 | `logs` | Get agent logs |
+| `watcher:start` | Start file watcher |
+| `watcher:stop` | Stop file watcher |
+| `watcher:status` | Get watcher status |
 | `diff` | Get git diff |
 | `sessions` | List sessions |
 | `approve:<id>` | Approve pending action |
@@ -160,7 +180,7 @@ The agent exposes a JSON WebSocket interface on `ws://127.0.0.1:8765`:
 
 ```
 hermes-ultimate/
-├── agent_ultimate.py     # ~1800 lines — all phases, providers, WS, plugins, safety, indexing
+├── agent_ultimate.py     # ~2200 lines — all phases, providers, WS, plugins, safety, indexing
 ├── requirements.txt       # Python dependencies
 ├── .env.example           # API key template (20 providers)
 ├── core/                  # Modular re-exports
@@ -219,14 +239,29 @@ hermes-ultimate/
 └────────────────┘   └───────────────────────────┘
 ```
 
+## Hermes Models
+
+Hermes Ultimate ships with Nous Hermes 3 as the default provider. Available sizes:
+
+| Model | Size | Context | Best For |
+|-------|------|---------|----------|
+| `hermes3:3b` | 1.7 GB | 131K | Fast tasks, lightweight coding |
+| `hermes3:8b` | 4.7 GB | 131K | General coding (default) |
+| `hermes3:70b` | 40 GB | 131K | Complex reasoning, architecture |
+| `hermes3:405b` | 231 GB | 131K | Maximum capability |
+
+All Hermes models support tool use and reasoning. The agent automatically routes through Ollama (`http://localhost:11434`).
+
 ## Testing
 
 ```bash
 # Run all tests
-python -m pytest tests/ -v
+python3 tests/test_e2e_ws.py  # 44/44 E2E tests
+python3 -m pytest tests/ -v  # 58 unit tests
 
 # Run with coverage
-python -m pytest tests/ -v --cov=agent_ultimate
+python3 tests/test_e2e_ws.py  # 44/44 E2E tests
+python3 -m pytest tests/ -v  # 58 unit tests --cov=agent_ultimate
 
 # Frontend type check
 cd desktop && npx tsc --noEmit
