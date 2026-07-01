@@ -66,6 +66,7 @@ fn main() {
             process: Mutex::new(None),
         })
         .setup(|app| {
+            // Auto-start agent
             let state: tauri::State<AgentState> = app.state();
             let mut guard = state.process.lock().expect("mutex poisoned");
             let child = Command::new("python3")
@@ -77,6 +78,42 @@ fn main() {
                 .expect("Failed to spawn agent process");
             *guard = Some(child);
             println!("🐍 Agent auto-started on ws://127.0.0.1:8765");
+
+            // System tray
+            #[cfg(desktop)]
+            {
+                use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
+                let _tray = TrayIconBuilder::new()
+                    .tooltip("Hermes-Ultimate Agent")
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                            let app = tray.app_handle();
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
+
+            // Global shortcut: CmdOrCtrl+Shift+H to toggle window
+            #[cfg(desktop)]
+            {
+                use tauri::GlobalShortcutExt;
+                let handle = app.handle().clone();
+                app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+H", move |_app, _shortcut, event| {
+                    if let Some(w) = handle.get_webview_window("main") {
+                        if w.is_visible().unwrap_or(false) {
+                            let _ = w.hide();
+                        } else {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                }).expect("Failed to register global shortcut");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status]);

@@ -17,12 +17,17 @@ const SLASH_COMMANDS: Record<string, string> = {
   "/test:name": "Test a provider connection (e.g. /test:openai)",
   "/diff": "Show git diff preview",
   "/status": "Show git status",
+  "/files": "Show file explorer",
+  "/branches": "Show git branches",
+  "/log": "Show git log",
 };
 
 export default function ChatView() {
   const messages = useStore((s) => s.messages);
   const connected = useStore((s) => s.connected);
   const connecting = useStore((s) => s.connecting);
+  const streamingContent = useStore((s) => s.streamingContent);
+  const streamingMessageId = useStore((s) => s.streamingMessageId);
   const [input, setInput] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [imageData, setImageData] = useState<string | null>(null);
@@ -31,7 +36,7 @@ export default function ChatView() {
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages, streamingContent]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -63,10 +68,16 @@ export default function ChatView() {
         const helpText = Object.entries(SLASH_COMMANDS).map(([k, v]) => `${k} — ${v}`).join("\n");
         useStore.getState().addMessage({ id: Date.now().toString(), role: "user", content: text, toolCalls: [], timestamp: new Date() });
         useStore.getState().addMessage({ id: (Date.now()+1).toString(), role: "assistant", content: `## Available Commands\n\n${helpText}`, toolCalls: [], timestamp: new Date() });
-      } else if (["map", "cost", "logs", "kanban", "undo", "diff", "status"].includes(cmd)) {
+      } else if (["map", "cost", "logs", "kanban", "undo", "diff", "status", "files"].includes(cmd)) {
         command(full);
         useStore.getState().addMessage({ id: Date.now().toString(), role: "user", content: text, toolCalls: [], timestamp: new Date() });
         useStore.getState().addMessage({ id: (Date.now()+1).toString(), role: "assistant", content: `Running: ${full}...`, toolCalls: [], timestamp: new Date() });
+      } else if (cmd === "branches") {
+        command("git_branches");
+        useStore.getState().addMessage({ id: Date.now().toString(), role: "user", content: text, toolCalls: [], timestamp: new Date() });
+      } else if (cmd === "log") {
+        command("git_log");
+        useStore.getState().addMessage({ id: Date.now().toString(), role: "user", content: text, toolCalls: [], timestamp: new Date() });
       } else {
         send(text);
       }
@@ -174,6 +185,31 @@ export default function ChatView() {
             ))}
           </div>
         ))}
+        {streamingMessageId && streamingContent && (
+          <div style={{ ...styles.msg, alignSelf: "flex-start", background: "#252540", maxWidth: "80%" }}>
+            <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>Assistant</div>
+            <div style={{ lineHeight: 1.5, fontSize: 14 }}>
+              <ReactMarkdown
+                components={{
+                  code({ className, children, ...props }) {
+                    const match = /language-(\w+)/.exec(className || "");
+                    if (match) {
+                      return (
+                        <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div">
+                          {String(children).replace(/\n$/, "")}
+                        </SyntaxHighlighter>
+                      );
+                    }
+                    return <code style={{ background: "#2a2a3e", padding: "2px 6px", borderRadius: 4, fontSize: 13 }} {...props}>{children}</code>;
+                  },
+                }}
+              >
+                {streamingContent}
+              </ReactMarkdown>
+              <span style={{ animation: "blink 1s infinite", color: "#7c7cff" }}>|</span>
+            </div>
+          </div>
+        )}
         <div ref={endRef} />
       </div>
       {imageData && (

@@ -386,6 +386,99 @@ def test_provider(provider: str = "") -> str:
     except Exception as e:
         return f"{target}: FAIL ({e})"
 
+# ============== NEW TOOLS: Git Branch, File Explorer, Suggest/Approve ==============
+
+_pending_writes: Dict[str, Dict] = {}
+
+@registry.register(description="Push committed changes to remote. Specify branch (default: current).")
+def git_push(branch: str = "") -> str:
+    try:
+        target = branch or subprocess.run(["git","rev-parse","--abbrev-ref","HEAD"], capture_output=True, text=True).stdout.strip()
+        r = subprocess.run(["git","push","origin", target], capture_output=True, text=True, cwd=os.getcwd())
+        return f"Pushed {target}: {r.stdout.strip() or r.stderr.strip() or 'OK'}"
+    except Exception as e: return f"git_push error: {e}"
+
+@registry.register(description="List branches, create new branch, or switch branch.")
+def git_branch(name: str = "", switch: str = "false") -> str:
+    try:
+        if name:
+            r = subprocess.run(["git","branch", name], capture_output=True, text=True, cwd=os.getcwd())
+            if switch.lower() == "true":
+                r2 = subprocess.run(["git","checkout", name], capture_output=True, text=True, cwd=os.getcwd())
+                return f"Created and switched to {name}: {r2.stdout.strip() or r2.stderr.strip() or 'OK'}"
+            return f"Created branch {name}: {r.stdout.strip() or r.stderr.strip() or 'OK'}"
+        r = subprocess.run(["git","branch","-a"], capture_output=True, text=True, cwd=os.getcwd())
+        return r.stdout.strip() or "(no branches)"
+    except Exception as e: return f"git_branch error: {e}"
+
+@registry.register(description="Show git log (last N commits with stats).")
+def git_log(n: str = "10") -> str:
+    try:
+        r = subprocess.run(["git","log",f"--oneline","--stat","-n", str(n)], capture_output=True, text=True, cwd=os.getcwd())
+        return r.stdout.strip() or "(no commits)"
+    except Exception as e: return f"git_log error: {e}"
+
+@registry.register(description="List files and directories at a path. Returns JSON tree.")
+def list_files(path: str = ".", max_depth: str = "3") -> str:
+    try:
+        root = Path(path).resolve()
+        result = {"name": root.name, "type": "dir", "children": []}
+        depth = int(max_depth)
+        def _scan(d: Path, current_depth: int):
+            if current_depth >= depth: return []
+            children = []
+            try:
+                for item in sorted(d.iterdir()):
+                    if item.name.startswith(".") and item.name not in (".github", ".env.example"): continue
+                    if item.name in ("node_modules", "__pycache__", "target", ".git", "dist", "build"): continue
+                    if item.is_dir():
+                        children.append({"name": item.name, "type": "dir", "children": _scan(item, current_depth + 1)})
+                    else:
+                        size = item.stat().st_size
+                        children.append({"name": item.name, "type": "file", "size": size})
+            except PermissionError: pass
+            return children
+        result["children"] = _scan(root, 0)
+        return json.dumps(result, indent=2)
+    except Exception as e: return f"list_files error: {e}"
+
+@registry.register(description="Suggest a file write for user approval. Returns diff preview. User must confirm with confirm_write.")
+def suggest_write(filepath: str, content: str) -> str:
+    try:
+        p = Path(filepath)
+        old_content = p.read_text() if p.exists() else ""
+        import difflib
+        old_lines = old_content.splitlines(keepends=True)
+        new_lines = content.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{filepath}", tofile=f"b/{filepath}", lineterm=""))
+        diff_text = "\n".join(diff_lines) if diff_lines else "(no changes)"
+        write_id = f"w-{int(time.time()*1000)}"
+        _pending_writes[write_id] = {"filepath": filepath, "content": content}
+        return json.dumps({"id": write_id, "filepath": filepath, "diff": diff_text, "status": "pending_approval"})
+    except Exception as e: return f"suggest_write error: {e}"
+
+@registry.register(description="Confirm and execute a pending file write (from suggest_write). Pass the write ID.")
+def confirm_write(write_id: str) -> str:
+    pending = _pending_writes.get(write_id)
+    if not pending: return f"No pending write with id {write_id}"
+    filepath = pending["filepath"]
+    content = pending["content"]
+    del _pending_writes[write_id]
+    try:
+        p = Path(filepath)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
+        subprocess.run(["git","add", filepath], capture_output=True, text=True)
+        return f"✅ Written {filepath} ({len(content)} chars)"
+    except Exception as e: return f"confirm_write error: {e}"
+
+@registry.register(description="Discard a pending file write (from suggest_write).")
+def deny_write(write_id: str) -> str:
+    if write_id in _pending_writes:
+        del _pending_writes[write_id]
+        return f"Denied write {write_id}"
+    return f"No pending write with id {write_id}"
+
 # Config file loader
 HERMES_CONFIG_PATH = ".hermes.json"
 def _load_config() -> dict:
@@ -506,6 +599,10 @@ PROVIDER_CONFIGS = {
     "cohere":     {"env": "COHERE_API_KEY",       "lib": "cohere",     "default_model": "command-r-plus"},
     "perplexity": {"env": "PERPLEXITY_API_KEY",   "lib": "openai",     "base": "https://api.perplexity.ai", "default_model": "sonar-pro"},
     "novita":     {"env": "NOVITA_API_KEY",       "lib": "openai",     "base": "https://api.novita.ai/v3/openai", "default_model": "meta-llama/llama-3.1-8b-instruct"},
+    "bedrock":    {"env": "AWS_ACCESS_KEY_ID",    "lib": "openai",     "base": None, "default_model": "anthropic.claude-3-5-sonnet-20241022-v2:0"},
+    "azure":      {"env": "AZURE_OPENAI_API_KEY", "lib": "openai",     "base": None, "default_model": "gpt-4o-mini"},
+    "huggingface":{"env": "HF_TOKEN",             "lib": "openai",     "base": "https://api-inference.huggingface.co/v1", "default_model": "meta-llama/Llama-3.3-70B-Instruct"},
+    "replicate":  {"env": "REPLICATE_API_TOKEN",  "lib": "openai",     "base": "https://api.replicate.com/v1", "default_model": "meta/meta-llama-3.1-70b-instruct"},
 }
 
 def _get_provider_client(provider: str = None):
@@ -523,7 +620,82 @@ def _get_provider_client(provider: str = None):
 
 class ProviderRouter:
     @staticmethod
-    def call(messages: List[Dict], tools_schemas: List[Dict], provider: str = None):
+    def call_stream(messages: List[Dict], tools_schemas: List[Dict], provider: str = None):
+        """Streaming variant: yields (chunk_text, tool_calls_or_None, usage_dict)."""
+        provider = provider or LLM_PROVIDER
+        cfg = PROVIDER_CONFIGS.get(provider)
+        if not cfg: raise ValueError(f"Unsupported provider: {provider}")
+        model = os.getenv("MODEL_NAME", cfg.get("default_model", "gpt-4o-mini"))
+        api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
+        base = cfg.get("base")
+
+        if cfg.get("lib") == "openai":
+            import openai
+            client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
+            om = []
+            for m in messages:
+                if m["role"] == "system": om.append({"role": "system", "content": m["content"]})
+                elif m["role"] == "user": om.append({"role": "user", "content": m.get("content","")})
+                elif m["role"] == "assistant": om.append({"role": "assistant", "content": m.get("content","")})
+                elif m["role"] == "tool": om.append({"role": "tool", "tool_call_id": m.get("tool_call_id",""), "content": m["content"]})
+            stream = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None, stream=True)
+            tool_calls = []
+            content_parts = []
+            usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            for chunk in stream:
+                delta = chunk.choices[0].delta if chunk.choices else None
+                if delta:
+                    if delta.content:
+                        content_parts.append(delta.content)
+                        yield delta.content, None, None
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            idx = tc.index
+                            while len(tool_calls) <= idx:
+                                tool_calls.append({"id": "", "function": {"name": "", "arguments": ""}})
+                            if tc.id: tool_calls[idx]["id"] = tc.id
+                            if tc.function and tc.function.name:
+                                tool_calls[idx]["function"]["name"] = tc.function.name
+                            if tc.function and tc.function.arguments:
+                                tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    usage = {"prompt_tokens": chunk.usage.prompt_tokens, "completion_tokens": chunk.usage.completion_tokens}
+            _track_cost(provider, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+            class StreamResult:
+                def __init__(self):
+                    self.content = "".join(content_parts) or None
+                    self.tool_calls = tool_calls if tool_calls and tool_calls[0]["id"] else []
+                    self.usage = type('U', (), usage)()
+            yield None, StreamResult(), usage
+
+        elif cfg.get("lib") == "anthropic":
+            import anthropic
+            client = anthropic.Anthropic(api_key=api_key)
+            system = next((m["content"] for m in messages if m["role"] == "system"), "")
+            cm = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] in ["user","assistant"]]
+            an_tools = [{"name": t["function"]["name"], "description": t["function"]["description"], "input_schema": t["function"]["parameters"]} for t in tools_schemas]
+            content_parts = []
+            tool_calls = []
+            with client.messages.stream(model=model, system=system, messages=cm, tools=an_tools, max_tokens=4096) as stream:
+                for text in stream.text_stream:
+                    content_parts.append(text)
+                    yield text, None, None
+                resp = stream.get_final_message()
+            for block in resp.content:
+                if hasattr(block, "type") and block.type == "tool_use":
+                    tool_calls.append({"id": block.id, "function": {"name": block.name, "arguments": json.dumps(block.input)}})
+            _track_cost(provider, resp.usage.input_tokens, resp.usage.output_tokens)
+            class StreamResult:
+                def __init__(self):
+                    self.content = "".join(content_parts) or None
+                    self.tool_calls = tool_calls
+                    self.usage = type('U', (), {"prompt_tokens": resp.usage.input_tokens, "completion_tokens": resp.usage.output_tokens})()
+            yield None, StreamResult(), {}
+
+        else:
+            # Fallback: non-streaming
+            result = ProviderRouter.call(messages, tools_schemas, provider)
+            yield None, result, {}
         provider = provider or LLM_PROVIDER
         cfg = PROVIDER_CONFIGS.get(provider)
         if not cfg: raise ValueError(f"Unsupported provider: {provider}")
@@ -830,9 +1002,37 @@ class WebSocketServer:
                 data = json.loads(message)
                 msg_type = data.get("type", "chat")
                 if msg_type == "chat":
-                    result = self.agent.run_loop([{"role":"system","content":self.agent.system_prompt},{"role":"user","content":data["text"]}])
+                    # Streaming chat
+                    self.agent.messages.append({"role":"user","content":data["text"]})
+                    schemas = self.agent.registry.get_openai_schemas()
+                    content_parts = []
+                    tool_calls = []
+                    for chunk_text, result, usage in ProviderRouter.call_stream(self.agent.messages, schemas, self.agent.provider):
+                        if chunk_text:
+                            content_parts.append(chunk_text)
+                            await websocket.send(json.dumps({"type":"token", "content":chunk_text}))
+                        if result:
+                            content_parts = [result.content or ""]
+                            tool_calls = result.tool_calls
+                    full_content = "".join(content_parts)
+                    self.agent.messages.append({"role":"assistant","content":full_content})
+                    if tool_calls:
+                        calls = []
+                        for tc in tool_calls:
+                            f = tc.get("function", tc) if isinstance(tc, dict) else getattr(tc, "function", tc)
+                            calls.append({"id": tc.get("id","") if isinstance(tc,dict) else getattr(tc,"id",""), "name": f.get("name","") if isinstance(f,dict) else getattr(f,"name",""), "args": json.loads(f.get("arguments","{}") if isinstance(f,dict) else getattr(f,"arguments","{}"))})
+                        results = self.agent.registry.execute_parallel(calls)
+                        for res in results:
+                            self.agent.messages.append({"role":"tool","tool_call_id":res["id"],"content":res["result"]})
+                        # Run another LLM iteration with tool results
+                        for chunk_text, result2, _ in ProviderRouter.call_stream(self.agent.messages, schemas, self.agent.provider):
+                            if chunk_text:
+                                await websocket.send(json.dumps({"type":"token", "content":chunk_text}))
+                            if result2:
+                                full_content = result2.content or ""
+                        self.agent.messages.append({"role":"assistant","content":full_content})
                     self.agent.store.save(self.agent.session_id, self.agent.messages)
-                    await websocket.send(json.dumps({"type":"response", "content":result}))
+                    await websocket.send(json.dumps({"type":"response","content":full_content,"toolCalls":[{"name":c["name"],"args":c["args"]} for c in tool_calls] if tool_calls else []}))
                 elif msg_type == "command":
                     cmd = data["command"]
                     if cmd == "kanban":
@@ -915,6 +1115,27 @@ class WebSocketServer:
                         new_prompt = cmd.split(":", 2)[2]
                         self.agent.system_prompt = new_prompt
                         await websocket.send(json.dumps({"type":"notification", "content":"System prompt updated"}))
+                    elif cmd == "files":
+                        result = registry.execute("list_files", {"path": ".", "max_depth": "3"})
+                        await websocket.send(json.dumps({"type":"files", "data":json.loads(result)}))
+                    elif cmd.startswith("files:"):
+                        target = cmd.split(":", 1)[1]
+                        result = registry.execute("list_files", {"path": target, "max_depth": "3"})
+                        await websocket.send(json.dumps({"type":"files", "data":json.loads(result)}))
+                    elif cmd == "git_branches":
+                        result = registry.execute("git_branch", {})
+                        await websocket.send(json.dumps({"type":"git_branches", "data":result}))
+                    elif cmd == "git_log":
+                        result = registry.execute("git_log", {"n": "20"})
+                        await websocket.send(json.dumps({"type":"git_log", "data":result}))
+                    elif cmd.startswith("approve:"):
+                        wid = cmd.split(":", 1)[1]
+                        result = registry.execute("confirm_write", {"write_id": wid})
+                        await websocket.send(json.dumps({"type":"notification", "content":result}))
+                    elif cmd.startswith("deny:"):
+                        wid = cmd.split(":", 1)[1]
+                        result = registry.execute("deny_write", {"write_id": wid})
+                        await websocket.send(json.dumps({"type":"notification", "content":result}))
                     # Send any streamed lines
                     stream = _drain_stream()
                     if stream:

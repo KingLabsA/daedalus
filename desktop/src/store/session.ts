@@ -28,6 +28,13 @@ export interface CostData {
   by_provider: Record<string, { calls: number; input: number; output: number; cost: number }>;
 }
 
+export interface FileNode {
+  name: string;
+  type: "file" | "dir";
+  size?: number;
+  children?: FileNode[];
+}
+
 interface AgentState {
   connected: boolean;
   connecting: boolean;
@@ -45,6 +52,12 @@ interface AgentState {
   stream: StreamEntry[];
   sessions: string[];
   providerTestResult: string;
+  streamingContent: string;
+  streamingMessageId: string | null;
+  files: FileNode | null;
+  gitBranches: string;
+  gitLog: string;
+  theme: "dark" | "light";
   addMessage: (msg: Message) => void;
   setConnected: (v: boolean) => void;
   setConnecting: (v: boolean) => void;
@@ -62,6 +75,12 @@ interface AgentState {
   appendStream: (s: StreamEntry[]) => void;
   setProviderTestResult: (r: string) => void;
   setSessions: (s: string[]) => void;
+  setStreamingContent: (c: string) => void;
+  setStreamingMessageId: (id: string | null) => void;
+  setFiles: (f: FileNode | null) => void;
+  setGitBranches: (b: string) => void;
+  setGitLog: (l: string) => void;
+  setTheme: (t: "dark" | "light") => void;
 }
 
 const emptyKanban: KanbanState = { todo: [], in_progress: [], review: [], done: [] };
@@ -83,6 +102,12 @@ export const useStore = create<AgentState>((set) => ({
   stream: [],
   sessions: [],
   providerTestResult: "",
+  streamingContent: "",
+  streamingMessageId: null,
+  files: null,
+  gitBranches: "",
+  gitLog: "",
+  theme: "dark",
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setConnected: (v) => set({ connected: v }),
   setConnecting: (v) => set({ connecting: v }),
@@ -100,6 +125,12 @@ export const useStore = create<AgentState>((set) => ({
   appendStream: (s) => set((prev) => ({ stream: [...prev.stream, ...s] })),
   setProviderTestResult: (r) => set({ providerTestResult: r }),
   setSessions: (s) => set({ sessions: s }),
+  setStreamingContent: (c) => set({ streamingContent: c }),
+  setStreamingMessageId: (id) => set({ streamingMessageId: id }),
+  setFiles: (f) => set({ files: f }),
+  setGitBranches: (b) => set({ gitBranches: b }),
+  setGitLog: (l) => set({ gitLog: l }),
+  setTheme: (t) => set({ theme: t }),
 }));
 
 export interface StoreState extends AgentState {

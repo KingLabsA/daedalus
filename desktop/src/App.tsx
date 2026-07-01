@@ -8,10 +8,11 @@ import LogViewer from "./components/LogViewer/LogViewer";
 import GitPanel from "./components/Git/GitPanel";
 import LspPanel from "./components/Lsp/LspPanel";
 import SessionPanel from "./components/Sessions/SessionPanel";
+import FileExplorer from "./components/Files/FileExplorer";
 import { WsProvider, useWs } from "./hooks/useWebSocket";
 import { useStore } from "./store/session";
 
-type Tab = "chat" | "kanban" | "agents" | "composer" | "git" | "lsp" | "logs" | "sessions" | "settings";
+type Tab = "chat" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
 
 function ConnectionBar() {
   const { connected, connecting } = useWs();
@@ -22,6 +23,25 @@ function ConnectionBar() {
       transition: "background 0.4s",
       flexShrink: 0,
     }} />
+  );
+}
+
+function ThemeToggle() {
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
+  return (
+    <button
+      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      style={{
+        width: 60, height: 36, border: "none", borderRadius: 8, cursor: "pointer",
+        background: theme === "dark" ? "#252540" : "#e8e8f0",
+        color: theme === "dark" ? "#a0a0b8" : "#333",
+        fontSize: 16, marginBottom: 8,
+      }}
+      title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+    >
+      {theme === "dark" ? "☀" : "☾"}
+    </button>
   );
 }
 
@@ -95,6 +115,7 @@ function AppContent() {
   const setLogs = useStore((s) => s.setLogs);
   const setDiff = useStore((s) => s.setDiff);
   const setLsp = useStore((s) => s.setLsp);
+  const theme = useStore((s) => s.theme);
 
   useEffect(() => {
     const ul = subscribe("logs", (msg: unknown) => setLogs((msg as any).data ?? []));
@@ -109,19 +130,33 @@ function AppContent() {
     { id: "agents", label: "Dashboard", short: "DB" },
     { id: "composer", label: "Composer", short: "CP" },
     { id: "git", label: "Git", short: "GT" },
+    { id: "files", label: "Files", short: "FL" },
     { id: "lsp", label: "LSP", short: "LS" },
     { id: "sessions", label: "Sessions", short: "SN" },
     { id: "logs", label: "Logs", short: "LG" },
     { id: "settings", label: "Settings", short: "ST" },
   ];
 
+  const cssVars = theme === "dark"
+    ? { bg: "#1a1a2e", text: "#e0e0e0", sidebarBg: "#16162a", border: "#2a2a3e" }
+    : { bg: "#f0f0f5", text: "#1a1a2e", sidebarBg: "#e0e0e8", border: "#c0c0d0" };
+
   return (
-    <div style={styles.container}>
+    <div style={{ ...styles.container, background: cssVars.bg, color: cssVars.text }}>
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+        * { scrollbar-width: thin; scrollbar-color: #3a3a5c transparent; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #3a3a5c; border-radius: 3px; }
+      `}</style>
       <StartupOverlay />
       <ConnectionBar />
       <div style={styles.body}>
-        <nav style={styles.sidebar}>
+        <nav style={{ ...styles.sidebar, background: cssVars.sidebarBg, borderRight: `1px solid ${cssVars.border}` }}>
           <div style={styles.logo}>HU</div>
+          <ThemeToggle />
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -148,6 +183,7 @@ function AppContent() {
           {activeTab === "agents" && <AgentDashboard />}
           {activeTab === "composer" && <Composer />}
           {activeTab === "git" && <GitPanel />}
+          {activeTab === "files" && <FileExplorer />}
           {activeTab === "lsp" && <LspPanel />}
           {activeTab === "sessions" && <SessionPanel />}
           {activeTab === "logs" && <LogViewer />}
@@ -169,21 +205,19 @@ export default function App() {
 const styles: Record<string, React.CSSProperties> = {
   container: {
     display: "flex", flexDirection: "column", height: "100vh",
-    background: "#1a1a2e", color: "#e0e0e0",
     fontFamily: "'Inter', system-ui, sans-serif",
   },
   body: { display: "flex", flex: 1, overflow: "hidden" },
   sidebar: {
-    width: 72, background: "#16162a", display: "flex", flexDirection: "column",
+    width: 72, display: "flex", flexDirection: "column",
     alignItems: "center", padding: "12px 0", gap: 4,
-    borderRight: "1px solid #2a2a3e",
   },
   logo: {
-    fontSize: 16, fontWeight: 700, color: "#7c7cff", marginBottom: 20,
+    fontSize: 16, fontWeight: 700, color: "#7c7cff", marginBottom: 8,
     letterSpacing: 2, fontFamily: "'JetBrains Mono', monospace",
   },
   navBtn: {
-    width: 60, height: 52, border: "none", borderRadius: 10, cursor: "pointer",
+    width: 60, height: 48, border: "none", borderRadius: 10, cursor: "pointer",
     display: "flex", flexDirection: "column", alignItems: "center",
     justifyContent: "center", gap: 2, color: "#a0a0b8", transition: "all 0.15s",
   },

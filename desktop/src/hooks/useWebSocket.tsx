@@ -52,14 +52,6 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
         const st = store.getState();
 
         switch (data.type) {
-          case "response":
-            st.addMessage({
-              id: `m-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              role: "assistant",
-              content: data.content,
-              timestamp: new Date(),
-            });
-            break;
           case "kanban":
             st.setKanban(data.data);
             break;
@@ -100,6 +92,36 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
             break;
           case "provider_test_result":
             st.setProviderTestResult(data.data);
+            break;
+          case "token":
+            if (st.streamingMessageId) {
+              st.setStreamingContent(st.streamingContent + data.content);
+            } else {
+              const newId = `stream-${Date.now()}`;
+              st.setStreamingMessageId(newId);
+              st.setStreamingContent(data.content);
+            }
+            break;
+          case "response":
+            if (st.streamingMessageId) {
+              st.addMessage({
+                id: st.streamingMessageId,
+                role: "assistant",
+                content: data.content,
+                timestamp: new Date(),
+              });
+              st.setStreamingContent("");
+              st.setStreamingMessageId(null);
+            }
+            break;
+          case "files":
+            st.setFiles(data.data);
+            break;
+          case "git_branches":
+            st.setGitBranches(data.data);
+            break;
+          case "git_log":
+            st.setGitLog(data.data);
             break;
         }
 
