@@ -12,7 +12,7 @@ export default function GitPanel() {
 
   const handleUndo = () => {
     setUndoing(true);
-    sendCommand("command:undo");
+    sendCommand("undo");
     setTimeout(() => {
       handleRefresh();
       setUndoing(false);

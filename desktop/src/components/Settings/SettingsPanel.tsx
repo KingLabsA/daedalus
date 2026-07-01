@@ -58,6 +58,7 @@ const PROVIDER_MODELS: Record<string, string[]> = {
 };
 
 export default function SettingsPanel() {
+  const [systemPrompt, setSystemPrompt] = useState("");
   const provider = useStore((s) => s.provider);
   const model = useStore((s) => s.model);
   const connected = useStore((s) => s.connected);
@@ -65,7 +66,7 @@ export default function SettingsPanel() {
   const providerTestResult = useStore((s) => s.providerTestResult);
   const setProvider = useStore((s) => s.setProvider);
   const setModel = useStore((s) => s.setModel);
-  const { switchProvider, sendCommand } = useWs();
+  const { switchProvider, sendCommand, subscribe } = useWs();
   const [testing, setTesting] = useState<string | null>(null);
 
   const handleProviderChange = (p: string) => {
@@ -80,6 +81,18 @@ export default function SettingsPanel() {
   };
 
   const handleFetchCost = () => sendCommand("cost");
+
+  React.useEffect(() => {
+    const unsub = subscribe("system_prompt", (data: unknown) => {
+      setSystemPrompt((data as any).data || "");
+    });
+    sendCommand("system_prompt");
+    return unsub;
+  }, [subscribe, sendCommand]);
+
+  const handleSavePrompt = () => {
+    sendCommand(`system_prompt:set:${systemPrompt}`);
+  };
 
   return (
     <div style={styles.container}>
@@ -121,7 +134,7 @@ export default function SettingsPanel() {
         <div style={styles.section}>
           <div style={styles.sectionTitle}>Test Connection</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {PROVIDERS.slice(0, 8).map((p) => (
+            {PROVIDERS.map((p) => (
               <button
                 key={p.id}
                 style={styles.testBtn}
@@ -135,6 +148,19 @@ export default function SettingsPanel() {
           {providerTestResult && (
             <div style={styles.testResult}>{providerTestResult}</div>
           )}
+        </div>
+        <div style={styles.section}>
+          <div style={styles.sectionTitle}>System Prompt</div>
+          <textarea
+            style={styles.textarea}
+            rows={4}
+            value={systemPrompt}
+            onChange={(e) => setSystemPrompt(e.target.value)}
+            placeholder="Loading system prompt..."
+          />
+          <button style={{ ...styles.btn, marginTop: 8 }} onClick={handleSavePrompt}>
+            Update Prompt
+          </button>
         </div>
         <div style={styles.section}>
           <div style={styles.sectionTitle}>Session Cost</div>
@@ -211,6 +237,12 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 8, padding: "6px 10px", borderRadius: 6,
     background: "#1a1a30", border: "1px solid #3a3a5c",
     fontSize: 11, color: "#aaa", fontFamily: "'JetBrains Mono', monospace",
+  },
+  textarea: {
+    width: "100%", padding: "9px 14px", borderRadius: 10,
+    border: "1px solid #3a3a5c", background: "#1e1e36",
+    color: "#e0e0e0", fontSize: 13, outline: "none",
+    fontFamily: "'JetBrains Mono', monospace", resize: "vertical",
   },
   costBox: {
     marginTop: 8, padding: "10px 14px", borderRadius: 8,

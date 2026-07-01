@@ -43,6 +43,7 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
         ws.send(JSON.stringify({ type: "command", command: "diff" }));
         ws.send(JSON.stringify({ type: "command", command: "lsp" }));
         ws.send(JSON.stringify({ type: "command", command: "logs" }));
+        ws.send(JSON.stringify({ type: "command", command: "sessions" }));
       };
 
     ws.onmessage = (event) => {
@@ -79,6 +80,17 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
             break;
           case "lsp":
             st.setLsp(data.data || "");
+            break;
+          case "sessions":
+            st.setSessions(data.data || []);
+            break;
+          case "notification":
+            st.addMessage({
+              id: `notif-${Date.now()}`,
+              role: "assistant",
+              content: data.content || JSON.stringify(data.data),
+              timestamp: new Date(),
+            });
             break;
           case "stream":
             st.appendStream(data.data || []);

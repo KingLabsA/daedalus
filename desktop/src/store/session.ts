@@ -43,6 +43,7 @@ interface AgentState {
   lsp: string;
   cost: CostData | null;
   stream: StreamEntry[];
+  sessions: string[];
   providerTestResult: string;
   addMessage: (msg: Message) => void;
   setConnected: (v: boolean) => void;
@@ -60,6 +61,7 @@ interface AgentState {
   setStream: (s: StreamEntry[]) => void;
   appendStream: (s: StreamEntry[]) => void;
   setProviderTestResult: (r: string) => void;
+  setSessions: (s: string[]) => void;
 }
 
 const emptyKanban: KanbanState = { todo: [], in_progress: [], review: [], done: [] };
@@ -79,6 +81,7 @@ export const useStore = create<AgentState>((set) => ({
   lsp: "",
   cost: null,
   stream: [],
+  sessions: [],
   providerTestResult: "",
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   setConnected: (v) => set({ connected: v }),
@@ -96,4 +99,9 @@ export const useStore = create<AgentState>((set) => ({
   setStream: (s) => set({ stream: s }),
   appendStream: (s) => set((prev) => ({ stream: [...prev.stream, ...s] })),
   setProviderTestResult: (r) => set({ providerTestResult: r }),
+  setSessions: (s) => set({ sessions: s }),
 }));
+
+export interface StoreState extends AgentState {
+  setSessions: (s: string[]) => void;
+}

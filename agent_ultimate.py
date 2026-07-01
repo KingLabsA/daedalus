@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os, sys, json, sqlite3, subprocess, threading, time, asyncio, tempfile, inspect, importlib, io, uuid, socket
 from pathlib import Path
+import shutil
 from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,6 +9,30 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ============== SECURITY CONSTRAINTS ==============
+BLOCKED_COMMANDS = ["rm -rf /", "sudo rm -rf", "format ", "mkfs", "dd if=", ":(){ :|:& };:"]
+MAX_FILE_SIZE = 500_000
+PROMPT_INJECTION_PATTERNS = [
+    "ignore all previous", "disregard", "forget your instructions",
+    "you are now", "act as", "system prompt", "new instructions",
+    "override", "pretend you are", "you must obey",
+]
+
+def _is_safe_command(cmd: str) -> bool:
+    lowered = cmd.lower()
+    for blocked in BLOCKED_COMMANDS:
+        if blocked in lowered:
+            return False
+    return True
+
+def _check_prompt_injection(text: str) -> bool:
+    lowered = text.lower()
+    matches = 0
+    for pattern in PROMPT_INJECTION_PATTERNS:
+        if pattern in lowered:
+            matches += 1
+    return matches >= 3
 
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
@@ -34,23 +59,27 @@ def _drain_stream() -> List[Dict]:
         return out
 
 # Cost tracking
-COST_PER_1K: Dict[str, Dict[str, float]] = {
-    "openai": {"input": 0.00015, "output": 0.0006},
+    COST_PER_1K: Dict[str, Dict[str, float]] = {
+    "openai": {"input": 0.00025, "output": 0.001},
     "anthropic": {"input": 0.003, "output": 0.015},
     "groq": {"input": 0.0001, "output": 0.0001},
-    "mistral": {"input": 0.0001, "output": 0.0003},
-    "google": {"input": 0.0001, "output": 0.0004},
+    "mistral": {"input": 0.0002, "output": 0.0006},
+    "google": {"input": 0.000125, "output": 0.0005},
     "deepseek": {"input": 0.00014, "output": 0.00028},
     "together": {"input": 0.0001, "output": 0.0001},
     "fireworks": {"input": 0.0001, "output": 0.0001},
     "xai": {"input": 0.00015, "output": 0.0006},
-    "perplexity": {"input": 0.0001, "output": 0.0001},
+    "perplexity": {"input": 0.0003, "output": 0.0015},
     "novita": {"input": 0.0001, "output": 0.0002},
     "openrouter": {"input": 0.0001, "output": 0.0001},
     "zhipu": {"input": 0.0001, "output": 0.0001},
     "moonshot": {"input": 0.0001, "output": 0.0001},
     "cohere": {"input": 0.00015, "output": 0.0006},
     "ollama": {"input": 0, "output": 0},
+    "bedrock": {"input": 0.0008, "output": 0.0032},
+    "azure": {"input": 0.00025, "output": 0.001},
+    "huggingface": {"input": 0.0001, "output": 0.0001},
+    "replicate": {"input": 0.0001, "output": 0.0001},
 }
 
 session_costs: List[Dict] = []
@@ -131,6 +160,8 @@ def _pyright_diagnostics(target: str = ".") -> str:
 
 @registry.register(description="Write content to a file (auto-stages changes for git)")
 def write_file(filepath: str, content: str) -> str:
+    if len(content) > MAX_FILE_SIZE:
+        return f"Error: File too large ({len(content)} bytes). Max: {MAX_FILE_SIZE}"
     fp = os.path.expanduser(filepath)
     before = ""
     if os.path.exists(fp):
@@ -145,6 +176,8 @@ def write_file(filepath: str, content: str) -> str:
 
 @registry.register(description="Append content to a file (auto-stages changes)")
 def append_file(filepath: str, content: str) -> str:
+    if len(content) > MAX_FILE_SIZE:
+        return f"Error: Content too large ({len(content)} bytes). Max: {MAX_FILE_SIZE}"
     fp = os.path.expanduser(filepath)
     before = ""
     if os.path.exists(fp):
@@ -202,11 +235,29 @@ def git_undo() -> str:
 def lsp_diagnostics(target: str = ".") -> str:
     return _pyright_diagnostics(target)
 
+@registry.register(description="Write content to a file (auto-stages changes for git)")
+def write_file(filepath: str, content: str) -> str:
+    if len(content) > MAX_FILE_SIZE:
+        return f"Error: File too large ({len(content)} bytes). Max: {MAX_FILE_SIZE}"
+    fp = os.path.expanduser(filepath)
+    before = ""
+    if os.path.exists(fp):
+        with open(fp) as f: before = f.read()
+    with open(fp, "w") as f: f.write(content)
+    diff = ""
+    if before:
+        diff = _git_diff(filepath) if before == "" else _git_diff(filepath)
+    _git_stage(fp)
+    _push_stream({"type":"file_written","filepath":filepath})
+    return f"Written to {filepath}"
+
 @registry.register(description="Stream command output line by line (live). Use for long-running cmds like build/test.")
-def run_command(command: str, use_docker: bool = False, image: str = "python:3.12-slim") -> str:
+def run_command(command: str, working_dir: str = "", use_docker: bool = True, image: str = "python:3.12-slim") -> str:
+    if not _is_safe_command(command):
+        return f"Error: Command blocked for security: {command[:80]}"
     def _stream_cmd(cmd):
         try:
-            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=working_dir or None)
             for line in iter(proc.stdout.readline, ""):
                 _push_stream({"type":"stream","line":line.rstrip()})
             proc.wait()
@@ -218,7 +269,8 @@ def run_command(command: str, use_docker: bool = False, image: str = "python:3.1
     if use_docker and shutil.which("docker"):
         cname = f"hermes-{uuid.uuid4().hex[:8]}"
         mount = f"{os.getcwd()}:/workspace"
-        cmd = f'docker run --rm --name {cname} -v "{mount}" -w /workspace {image} sh -c "{command}"'
+        wd = working_dir or "/workspace"
+        cmd = f'docker run --rm --name {cname} -v "{mount}" -w {wd} {image} sh -c "{command}"'
     else:
         cmd = command
     t = threading.Thread(target=_stream_cmd, args=(cmd,), daemon=True)
@@ -327,7 +379,8 @@ def test_provider(provider: str = "") -> str:
             return f"{target}: NO API KEY (set {cfg['env']})"
         t0 = time.time()
         client = _get_provider_client(target)
-        resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user","content":"say ok"}], max_tokens=5)
+        model = cfg.get("default_model", "gpt-4o-mini")
+        resp = client.chat.completions.create(model=model, messages=[{"role":"user","content":"say ok"}], max_tokens=10)
         lat = round(time.time() - t0, 2)
         return f"{target}: OK ({lat}s) via {cfg.get('default_model','?')}"
     except Exception as e:
@@ -398,7 +451,9 @@ workflow:
 Replace ALL concrete values with {{placeholders}}. Return ONLY markdown."""
         try:
             client = _get_provider_client(provider)
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.2)
+            cfg = PROVIDER_CONFIGS.get(provider, {})
+            model = cfg.get("default_model", "gpt-4o-mini")
+            resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], temperature=0.2)
             skill_md = resp.choices[0].message.content
         except Exception as e:
             skill_md = f"---\nname: {cls._recording_name}\ndescription: {cls._recording_description}\n---\n{json.dumps(cls._action_log, indent=2)}"
@@ -418,7 +473,9 @@ Goal: {goal}
 Create a NEW composed workflow that chains these skills together, reusing their steps. Output SKILL.md format."""
         try:
             client = _get_provider_client(provider)
-            resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": prompt}], temperature=0.3)
+            cfg = PROVIDER_CONFIGS.get(provider, {})
+            model = cfg.get("default_model", "gpt-4o-mini")
+            resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], temperature=0.3)
             workflow = resp.choices[0].message.content
         except Exception as e: return f"Compose failed: {e}"
         path = SKILLS_DIR / f"composed_{int(time.time())}.md"
@@ -678,16 +735,18 @@ class SessionStore:
             return [r[0] for r in conn.execute("SELECT session_id FROM sessions ORDER BY updated_at DESC").fetchall()]
 
 # ============== CONTEXT COMPRESSION ==============
-def compress_messages(messages: List[Dict], keep_recent: int = 5) -> List[Dict]:
+def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str = "") -> List[Dict]:
     if len(messages) <= 20: return messages
     system_msg = messages.pop(0) if messages and messages[0]["role"] == "system" else None
     middle = messages[3:-keep_recent]; recent = messages[-keep_recent:]
     if not middle: return messages
     prompt = "Summarize this conversation concisely:\n" + "\n".join([f"{m['role']}: {str(m.get('content',''))[:200]}" for m in middle])
     try:
-        import openai
-        client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        resp = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user","content":prompt}], max_tokens=200)
+        p = provider or LLM_PROVIDER
+        cfg = PROVIDER_CONFIGS.get(p, {})
+        client = _get_provider_client(p)
+        model = cfg.get("default_model", "gpt-4o-mini")
+        resp = client.chat.completions.create(model=model, messages=[{"role":"user","content":prompt}], max_tokens=200)
         summary = resp.choices[0].message.content
     except: summary = "[Conversation summarized]"
     compressed = messages[:3] + [{"role": "user", "content": f"[Summary]: {summary}"}] + recent
@@ -758,6 +817,13 @@ class WebSocketServer:
     def __init__(self, agent):
         self.agent = agent; self.clients = set()
     async def handler(self, websocket, path=None):
+        try:
+            origin = websocket.request_headers.get("Origin", "")
+            cors_origin = os.getenv("CORS_ORIGIN", "tauri://localhost")
+            if origin and cors_origin and origin != cors_origin and origin != "null":
+                pass
+        except:
+            pass
         self.clients.add(websocket)
         try:
             async for message in websocket:
@@ -765,6 +831,7 @@ class WebSocketServer:
                 msg_type = data.get("type", "chat")
                 if msg_type == "chat":
                     result = self.agent.run_loop([{"role":"system","content":self.agent.system_prompt},{"role":"user","content":data["text"]}])
+                    self.agent.store.save(self.agent.session_id, self.agent.messages)
                     await websocket.send(json.dumps({"type":"response", "content":result}))
                 elif msg_type == "command":
                     cmd = data["command"]
@@ -801,6 +868,24 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"provider", "data":p}))
                     elif cmd == "logs":
                         await websocket.send(json.dumps({"type":"logs", "data":self.agent.logs[-200:]}))
+                    elif cmd == "undo":
+                        result = git_undo()
+                        await websocket.send(json.dumps({"type":"notification", "content":result}))
+                        await websocket.send(json.dumps({"type":"diff", "data":_git_diff()}))
+                    elif cmd == "sessions":
+                        sessions = self.agent.store.list_sessions()
+                        await websocket.send(json.dumps({"type":"sessions", "data":sessions}))
+                    elif cmd.startswith("session:load:"):
+                        sid = cmd.split(":", 2)[2]
+                        msgs = self.agent.store.load(sid)
+                        if msgs:
+                            self.agent.messages = msgs
+                            await websocket.send(json.dumps({"type":"notification", "content":f"Loaded session {sid}"}))
+                        else:
+                            await websocket.send(json.dumps({"type":"notification", "content":f"Session {sid} not found"}))
+                    elif cmd == "session:save":
+                        self.agent.store.save(self.agent.session_id, self.agent.messages)
+                        await websocket.send(json.dumps({"type":"notification", "content":f"Session saved: {self.agent.session_id}"}))
                     elif cmd == "logs:clear":
                         self.agent.logs.clear()
                         await websocket.send(json.dumps({"type":"logs", "data":[]}))
@@ -824,6 +909,12 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"provider_test_result", "data":result}))
                     elif cmd == "cost":
                         await websocket.send(json.dumps({"type":"cost", "data":_get_cost_summary()}))
+                    elif cmd == "system_prompt":
+                        await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
+                    elif cmd.startswith("system_prompt:set:"):
+                        new_prompt = cmd.split(":", 2)[2]
+                        self.agent.system_prompt = new_prompt
+                        await websocket.send(json.dumps({"type":"notification", "content":"System prompt updated"}))
                     # Send any streamed lines
                     stream = _drain_stream()
                     if stream:
@@ -902,6 +993,10 @@ class UltimateAgent:
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
+        if self.messages and len(self.messages) >= 2:
+            user_content = self.messages[-1].get("content", "") if self.messages[-1]["role"] == "user" else ""
+            if len(user_content) > 20 and _check_prompt_injection(user_content):
+                self.logs.append({"type": "security_warning", "message": "Possible prompt injection detected"})
         self.logs.append({"type": "run_start", "timestamp": time.time(), "iterations": 0})
         for i in range(max_iters):
             self.logs.append({"type": "llm_call", "iteration": i, "timestamp": time.time()})

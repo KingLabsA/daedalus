@@ -7,10 +7,11 @@ import SettingsPanel from "./components/Settings/SettingsPanel";
 import LogViewer from "./components/LogViewer/LogViewer";
 import GitPanel from "./components/Git/GitPanel";
 import LspPanel from "./components/Lsp/LspPanel";
+import SessionPanel from "./components/Sessions/SessionPanel";
 import { WsProvider, useWs } from "./hooks/useWebSocket";
 import { useStore } from "./store/session";
 
-type Tab = "chat" | "kanban" | "agents" | "composer" | "git" | "lsp" | "logs" | "settings";
+type Tab = "chat" | "kanban" | "agents" | "composer" | "git" | "lsp" | "logs" | "sessions" | "settings";
 
 function ConnectionBar() {
   const { connected, connecting } = useWs();
@@ -109,6 +110,7 @@ function AppContent() {
     { id: "composer", label: "Composer", short: "CP" },
     { id: "git", label: "Git", short: "GT" },
     { id: "lsp", label: "LSP", short: "LS" },
+    { id: "sessions", label: "Sessions", short: "SN" },
     { id: "logs", label: "Logs", short: "LG" },
     { id: "settings", label: "Settings", short: "ST" },
   ];
@@ -147,6 +149,7 @@ function AppContent() {
           {activeTab === "composer" && <Composer />}
           {activeTab === "git" && <GitPanel />}
           {activeTab === "lsp" && <LspPanel />}
+          {activeTab === "sessions" && <SessionPanel />}
           {activeTab === "logs" && <LogViewer />}
           {activeTab === "settings" && <SettingsPanel />}
         </main>

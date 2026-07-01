@@ -1,6 +1,8 @@
 """
 E2E smoke test: start Python WS server, connect as frontend would,
 send chat, verify response, test tools/kanban WS commands.
+
+Run with:  python tests/test_e2e_smoke.py
 """
 import asyncio, json, os, signal, subprocess, sys, time
 from pathlib import Path
@@ -26,12 +28,12 @@ async def wait_for_server(host: str, port: int, timeout: float = 10) -> bool:
     return False
 
 
-async def test_connection(ws) -> None:
+async def _test_connection(ws) -> None:
     """Verify initial handshake / connection works."""
     print("  [PASS] WebSocket connected")
 
 
-async def test_tools_command(ws) -> int:
+async def _test_tools_command(ws) -> int:
     """Request tools list and verify structure."""
     await ws.send(json.dumps({"type": "command", "command": "tools"}))
     resp = await asyncio.wait_for(ws.recv(), timeout=5)
@@ -44,7 +46,7 @@ async def test_tools_command(ws) -> int:
     return n
 
 
-async def test_kanban_command(ws) -> None:
+async def _test_kanban_command(ws) -> None:
     """Request kanban board state."""
     await ws.send(json.dumps({"type": "command", "command": "kanban"}))
     resp = await asyncio.wait_for(ws.recv(), timeout=5)
@@ -53,7 +55,7 @@ async def test_kanban_command(ws) -> None:
     print(f"  [PASS] kanban: {data.get('type', '?')}")
 
 
-async def test_chat(ws) -> None:
+async def _test_chat(ws) -> None:
     """Send a simple chat message and verify a response arrives."""
     await ws.send(json.dumps({"type": "chat", "text": "Say exactly: smoke-test-ok"}))
     resp = await asyncio.wait_for(ws.recv(), timeout=TIMEOUT)
@@ -61,7 +63,6 @@ async def test_chat(ws) -> None:
     content = data.get("content", "")
     assert isinstance(content, str), "response content should be a string"
     assert len(content) > 0, "response content should not be empty"
-    # Accept LLM Error (no API key) as valid WS round-trip
     ok = "LLM Error" not in content or all(
         k in os.environ for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
     )
@@ -69,7 +70,7 @@ async def test_chat(ws) -> None:
     print(f"  [PASS] chat: {len(content)} chars ({status})")
 
 
-async def test_provider_switch(ws) -> None:
+async def _test_provider_switch(ws) -> None:
     """Switch provider and verify acknowledgment."""
     await ws.send(json.dumps({"type": "command", "command": "provider:ollama"}))
     resp = await asyncio.wait_for(ws.recv(), timeout=5)
@@ -82,7 +83,6 @@ async def test_provider_switch(ws) -> None:
 async def main():
     proc = None
     try:
-        # 1. Start server
         print("Starting Python WS server...")
         proc = subprocess.Popen(
             [sys.executable, SERVER_SCRIPT, "ws"],
@@ -90,7 +90,6 @@ async def main():
             cwd=ROOT,
         )
 
-        # 2. Wait for server
         HOST, PORT = "127.0.0.1", 8765
         ready = await wait_for_server(HOST, PORT, timeout=8)
         if not ready:
@@ -98,14 +97,13 @@ async def main():
             sys.exit(1)
         print(f"  [PASS] Server ready on {HOST}:{PORT}")
 
-        # 3. Connect as client
         import websockets
         async with websockets.connect(f"ws://{HOST}:{PORT}") as ws:
-            await test_connection(ws)
-            await test_tools_command(ws)
-            await test_kanban_command(ws)
-            await test_provider_switch(ws)
-            await test_chat(ws)
+            await _test_connection(ws)
+            await _test_tools_command(ws)
+            await _test_kanban_command(ws)
+            await _test_provider_switch(ws)
+            await _test_chat(ws)
 
         print(f"\n{'='*45}")
         print(" All 5 E2E smoke tests passed!")

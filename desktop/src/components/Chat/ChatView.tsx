@@ -1,4 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "../../store/session";
 import { useAgent } from "../../hooks/useAgent";
 import { useWs } from "../../hooks/useWebSocket";
@@ -29,6 +32,17 @@ export default function ChatView() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>('[data-chat-input]')?.focus();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const handleSend = () => {
     if (!input.trim() || loading) return;
@@ -130,8 +144,28 @@ export default function ChatView() {
             <div style={{ fontSize: 11, color: "#666", marginBottom: 4 }}>
               {m.role === "user" ? "You" : "Assistant"}
             </div>
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5, fontSize: 14 }}>
-              {m.content}
+            <div style={{ lineHeight: 1.5, fontSize: 14 }}>
+              {m.role === "assistant" ? (
+                <ReactMarkdown
+                  components={{
+                    code({ className, children, ...props }) {
+                      const match = /language-(\w+)/.exec(className || "");
+                      if (match) {
+                        return (
+                          <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div">
+                            {String(children).replace(/\n$/, "")}
+                          </SyntaxHighlighter>
+                        );
+                      }
+                      return <code style={{ background: "#2a2a3e", padding: "2px 6px", borderRadius: 4, fontSize: 13 }} {...props}>{children}</code>;
+                    },
+                  }}
+                >
+                  {m.content}
+                </ReactMarkdown>
+              ) : (
+                <span style={{ whiteSpace: "pre-wrap" }}>{m.content}</span>
+              )}
             </div>
             {m.toolCalls?.map((tc, i) => (
               <div key={i} style={styles.toolBadge}>
@@ -163,8 +197,11 @@ export default function ChatView() {
           style={styles.input}
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSend()}
-          placeholder={connected ? "Type a message or /command..." : "Agent offline"}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
+          }}
+          data-chat-input="true"
+          placeholder={connected ? "Type a message or /command... (⌘K)" : "Agent offline"}
           disabled={loading || !connected}
         />
         <button style={{
