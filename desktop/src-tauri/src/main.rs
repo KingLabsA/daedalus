@@ -69,8 +69,18 @@ fn main() {
             // Auto-start agent
             let state: tauri::State<AgentState> = app.state();
             let mut guard = state.process.lock().expect("mutex poisoned");
+            // Resolve project root: executable is at desktop/src-tauri/target/debug/hermes-ultimate
+            // We need to go up to the hermes-ultimate/ project root
+            let exe_path = std::env::current_exe().unwrap_or_default();
+            let project_root = exe_path.parent().unwrap()  // target/debug
+                .parent().unwrap()  // target
+                .parent().unwrap()  // src-tauri
+                .parent().unwrap()  // desktop
+                .parent().unwrap();  // hermes-ultimate (project root)
+            let agent_script = project_root.join("agent_ultimate.py");
+            println!("🐍 Starting agent from: {:?}", agent_script);
             let child = Command::new("python3")
-                .arg("agent_ultimate.py")
+                .arg(agent_script.to_str().unwrap_or("agent_ultimate.py"))
                 .arg("ws")
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
@@ -79,40 +89,9 @@ fn main() {
             *guard = Some(child);
             println!("🐍 Agent auto-started on ws://127.0.0.1:8765");
 
-            // System tray
-            #[cfg(desktop)]
-            {
-                use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
-                let _tray = TrayIconBuilder::new()
-                    .tooltip("Hermes-Ultimate Agent")
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                            let app = tray.app_handle();
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
-                        }
-                    })
-                    .build(app)?;
-            }
+            // System tray disabled on macOS (tao compatibility issue)
 
-            // Global shortcut: CmdOrCtrl+Shift+H to toggle window
-            #[cfg(desktop)]
-            {
-                use tauri::GlobalShortcutExt;
-                let handle = app.handle().clone();
-                app.global_shortcut().on_shortcut("CmdOrCtrl+Shift+H", move |_app, _shortcut, event| {
-                    if let Some(w) = handle.get_webview_window("main") {
-                        if w.is_visible().unwrap_or(false) {
-                            let _ = w.hide();
-                        } else {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                }).expect("Failed to register global shortcut");
-            }
+            // Global shortcut removed — feature not available in Tauri 2.11
 
             // Window persistence: restore position/size from config
             #[cfg(desktop)]
@@ -122,7 +101,7 @@ fn main() {
                     if let Ok(data) = std::fs::read_to_string(&conf_path) {
                         if let Ok(state) = serde_json::from_str::<serde_json::Value>(&data) {
                             if let (Some(x), Some(y)) = (state["x"].as_i64(), state["y"].as_i64()) {
-                                let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+                                let _ = w.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: x as i32, y: y as i32 }));
                             }
                             if let (Some(w_val), Some(h_val)) = (state["width"].as_i64(), state["height"].as_i64()) {
                                 let _ = w.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: w_val as u32, height: h_val as u32 }));
