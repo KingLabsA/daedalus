@@ -4,8 +4,8 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "hermes-ultimate"
-version = "0.1.0"
-description = "Autonomous coding agent from scratch"
+version = "0.2.0"
+description = "Production-grade autonomous coding agent with safety modes, codebase indexing, git checkpoints, and 20+ LLM providers"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0",

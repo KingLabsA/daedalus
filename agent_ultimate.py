@@ -259,10 +259,155 @@ def run_command(command: str, working_dir: str = "", use_docker: str = "false", 
     except Exception as e:
         return f"Error: {e}"
 
-@registry.register(description="Search for a pattern in files")
-def search_code(pattern: str, path: str = ".") -> str:
-    result = subprocess.run(f'grep -r -l "{pattern}" {path} 2>/dev/null || echo "No matches."', shell=True, capture_output=True, text=True)
-    return result.stdout or "No matches."
+@registry.register(description="Ripgrep-powered code search. Supports regex, file filters, case-insensitive. Returns file:line:content.")
+def grep(pattern: str, path: str = ".", include: str = "", ignore_case: str = "false", max_results: str = "50") -> str:
+    cmd_parts = ["rg", "--no-heading", "--color=never", "-n"]
+    if ignore_case.lower() in ("true", "1", "yes"):
+        cmd_parts.append("-i")
+    if include:
+        cmd_parts.extend(["-g", include])
+    cmd_parts.extend(["--max-count", "5"])
+    cmd_parts.append(pattern)
+    cmd_parts.append(path)
+    try:
+        result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=15)
+        lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
+        if len(lines) > int(max_results):
+            lines = lines[:int(max_results)] + [f"... ({len(lines) - int(max_results)} more matches)"]
+        return "\n".join(lines) if lines else "No matches."
+    except FileNotFoundError:
+        fallback = subprocess.run(
+            f'grep -r -n "{pattern}" {path} 2>/dev/null | head -{max_results}',
+            shell=True, capture_output=True, text=True
+        )
+        return fallback.stdout.strip() or "No matches (ripgrep not installed)."
+    except subprocess.TimeoutExpired:
+        return "Search timed out (>15s). Try a narrower path or pattern."
+    except Exception as e:
+        return f"Search error: {e}"
+
+@registry.register(description="Rename a symbol across all files in the project. Performs safe text replacement.")
+def rename_symbol(old_name: str, new_name: str, path: str = ".", include: str = "") -> str:
+    cmd_parts = ["rg", "-l", "--color=never"]
+    if include:
+        cmd_parts.extend(["-g", include])
+    cmd_parts.extend(["-w", old_name, path])
+    try:
+        result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=15)
+        files = [f for f in result.stdout.strip().split("\n") if f]
+    except FileNotFoundError:
+        fallback = subprocess.run(
+            f'grep -r -l -w "{old_name}" {path} 2>/dev/null',
+            shell=True, capture_output=True, text=True
+        )
+        files = [f for f in fallback.stdout.strip().split("\n") if f]
+    except Exception as e:
+        return f"Search error: {e}"
+    if not files:
+        return f"No files contain '{old_name}'"
+    changed = []
+    for filepath in files:
+        try:
+            content = Path(filepath).read_text(encoding="utf-8", errors="ignore")
+            count = len(re.findall(r'\b' + re.escape(old_name) + r'\b', content))
+            if count > 0:
+                new_content = re.sub(r'\b' + re.escape(old_name) + r'\b', new_name, content)
+                Path(filepath).write_text(new_content, encoding="utf-8")
+                changed.append(f"{filepath} ({count} occurrences)")
+        except Exception as e:
+            changed.append(f"{filepath} (error: {e})")
+    summary = f"Renamed '{old_name}' → '{new_name}' in {len(changed)} files:\n"
+    summary += "\n".join(f"  {c}" for c in changed)
+    return summary
+
+@registry.register(description="Explain a code snippet — describes what it does, inputs, outputs, and side effects.")
+def explain_code(code: str) -> str:
+    lines = code.strip().split("\n")
+    findings = []
+    findings.append(f"Lines: {len(lines)}")
+    imports = [l.strip() for l in lines if l.strip().startswith(("import ", "from "))]
+    if imports:
+        findings.append(f"Imports: {', '.join(imports)}")
+    funcs = [l.strip() for l in lines if l.strip().startswith("def ")]
+    classes = [l.strip() for l in lines if l.strip().startswith("class ")]
+    if funcs:
+        findings.append(f"Functions: {', '.join(f.split('(')[0].replace('def ', '') for f in funcs)}")
+    if classes:
+        findings.append(f"Classes: {', '.join(c.split('(')[0].split(':')[0].replace('class ', '') for c in classes)}")
+    has_return = any("return " in l for l in lines)
+    has_print = any("print(" in l for l in lines)
+    has_yield = any("yield " in l for l in lines)
+    side_effects = []
+    if has_print: side_effects.append("prints to stdout")
+    if has_yield: side_effects.append("is a generator")
+    if any("open(" in l for l in lines): side_effects.append("reads/writes files")
+    if any("subprocess" in l or "os.system" in l for l in lines): side_effects.append("runs external commands")
+    if any("requests." in l for l in lines): side_effects.append("makes HTTP requests")
+    if side_effects:
+        findings.append(f"Side effects: {', '.join(side_effects)}")
+    if has_return:
+        returns = [l.strip() for l in lines if "return " in l and not l.strip().startswith("#")]
+        if returns:
+            findings.append(f"Returns: {returns[0].strip()[:100]}")
+    return "\n".join(findings)
+
+@registry.register(description="Review code for bugs, security issues, and improvements. Returns structured findings.")
+def review_code(code: str, filepath: str = "") -> str:
+    findings = []
+    lines = code.strip().split("\n")
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "eval(" in stripped or "exec(" in stripped:
+            findings.append(f"L{i}: SECURITY — use of eval/exec: {stripped[:80]}")
+        if "os.system(" in stripped:
+            findings.append(f"L{i}: SECURITY — os.system is unsafe, use subprocess: {stripped[:80]}")
+        if "pickle.load" in stripped:
+            findings.append(f"L{i}: SECURITY — pickle.load on untrusted data: {stripped[:80]}")
+        if "shell=True" in stripped:
+            findings.append(f"L{i}: WARNING — subprocess with shell=True: {stripped[:80]}")
+        if "except:" in stripped or "except Exception:" in stripped:
+            findings.append(f"L{i}: STYLE — bare except clause: {stripped[:80]}")
+        if "TODO" in stripped or "FIXME" in stripped or "HACK" in stripped:
+            findings.append(f"L{i}: NOTE — unresolved marker: {stripped[:80]}")
+        if "import *" in stripped:
+            findings.append(f"L{i}: STYLE — wildcard import: {stripped[:80]}")
+        if len(stripped) > 120:
+            findings.append(f"L{i}: STYLE — line >120 chars ({len(stripped)}): {stripped[:60]}...")
+    if not lines:
+        findings.append("Empty code — nothing to review.")
+    elif not findings:
+        findings.append("No issues found.")
+    header = f"Code review for {filepath or '<snippet>'} ({len(lines)} lines, {len(findings)} findings)"
+    return header + "\n" + "\n".join(findings)
+
+@registry.register(description="Suggest safe refactorings for code: extract functions, simplify conditionals, reduce nesting.")
+def refactor_code(code: str) -> str:
+    lines = code.strip().split("\n")
+    suggestions = []
+    depth = 0
+    func_count = 0
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("def "):
+            func_count += 1
+        if stripped.startswith(("if ", "for ", "while ", "with ", "try:", "except")):
+            depth = max(depth, line.count("    ") + 1)
+        if stripped.startswith("def ") and i > 10:
+            prev = lines[max(0, i-10):i]
+            if any(l.strip().startswith(("if ", "for ")) for l in prev):
+                suggestions.append(f"L{i}: Consider extracting the logic before '{stripped[:50]}' into a helper function")
+    if depth > 4:
+        suggestions.append(f"Nesting depth {depth} detected — consider extracting inner blocks into functions")
+    if func_count == 0 and len(lines) > 30:
+        suggestions.append("No functions defined in 30+ lines — consider extracting reusable blocks into functions")
+    long_lines = [(i+1, l) for i, l in enumerate(lines) if len(l.strip()) > 100 and not l.strip().startswith("#")]
+    if long_lines:
+        suggestions.append(f"{len(long_lines)} lines exceed 100 chars — consider breaking them up")
+    if not suggestions:
+        suggestions.append("Code looks clean — no refactoring suggestions.")
+    return f"Refactoring suggestions ({len(suggestions)}):\n" + "\n".join(f"  • {s}" for s in suggestions)
 
 @registry.register(description="Execute Python code in a sandbox")
 def execute_python(code: str) -> str:
@@ -633,6 +778,71 @@ class HookManager:
     def list_hooks(cls) -> Dict[str, int]:
         return {event: len(cbs) for event, cbs in cls._hooks.items()}
 
+# ============== FILE WATCHER ==============
+class FileWatcher:
+    """Watches the project directory for changes and auto-reindexes."""
+    _observer = None
+    _indexer = None
+    _debounce_seconds = 2.0
+    _last_reindex = 0.0
+    _changed_files: set = set()
+
+    @classmethod
+    def start(cls, indexer=None, path: str = "."):
+        try:
+            from watchdog.observers import Observer
+            from watchdog.events import FileSystemEventHandler
+        except ImportError:
+            return "watchdog not installed — file watcher disabled"
+        if cls._observer and cls._observer.is_alive():
+            return "File watcher already running"
+        cls._indexer = indexer
+        _IGNORED = {".git", "__pycache__", "node_modules", ".hermes", ".pytest_cache", "dist", "build", ".venv"}
+
+        class ChangeHandler(FileSystemEventHandler):
+            def on_modified(self, event):
+                cls._track(event.src_path)
+            def on_created(self, event):
+                cls._track(event.src_path)
+            def on_deleted(self, event):
+                cls._track(event.src_path)
+
+        handler = ChangeHandler()
+        cls._observer = Observer()
+        cls._observer.schedule(handler, path, recursive=True)
+        cls._observer.daemon = True
+        cls._observer.start()
+        return "File watcher started"
+
+    @classmethod
+    def _track(cls, filepath: str):
+        from watchdog.events import FileSystemEventHandler
+        _IGNORED = {".git", "__pycache__", "node_modules", ".hermes", ".pytest_cache", "dist", "build", ".venv"}
+        parts = Path(filepath).parts
+        if any(p in _IGNORED for p in parts):
+            return
+        cls._changed_files.add(filepath)
+        now = time.time()
+        if now - cls._last_reindex > cls._debounce_seconds and len(cls._changed_files) > 2:
+            cls._last_reindex = now
+            cls._changed_files.clear()
+            if cls._indexer:
+                HookManager.fire("on_file_change", count=len(cls._changed_files))
+
+    @classmethod
+    def stop(cls):
+        if cls._observer and cls._observer.is_alive():
+            cls._observer.stop()
+            cls._observer.join(timeout=3)
+            cls._observer = None
+            return "File watcher stopped"
+        return "File watcher not running"
+
+    @classmethod
+    def status(cls) -> dict:
+        running = cls._observer is not None and cls._observer.is_alive()
+        return {"running": running, "pending_changes": len(cls._changed_files)}
+
 # ============== CHECKPOINT SYSTEM ==============
 class CheckpointManager:
     """Git-based checkpoint/rollback system."""
@@ -813,9 +1023,10 @@ class SafetyManager:
             return True, "auto-mode"
 
         # Always allow read-only tools
-        READ_ONLY = {"read_file", "list_files", "search_code", "git_status", "git_log",
+        READ_ONLY = {"read_file", "list_files", "grep", "git_status", "git_log",
                       "git_diff_preview", "map_repo", "get_time", "lsp_diagnostics",
-                      "web_search", "web_fetch", "test_provider", "list_providers"}
+                      "web_search", "web_fetch", "test_provider", "list_providers",
+                      "explain_code", "review_code", "refactor_code"}
         if tool_name in READ_ONLY:
             return True, "read-only"
 
@@ -1568,6 +1779,38 @@ class WebSocketServer:
                         model = cmd.split(":", 1)[1]
                         os.environ["MODEL_NAME"] = model
                         await websocket.send(json.dumps({"type":"model", "data":model}))
+                    elif cmd == "watcher:start":
+                        result = FileWatcher.start(self.agent.indexer)
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd == "watcher:stop":
+                        result = FileWatcher.stop()
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd == "watcher:status":
+                        await websocket.send(json.dumps({"type":"watcher_status","data":FileWatcher.status()}))
+                    elif cmd.startswith("grep:"):
+                        parts = cmd.split(":", 3)
+                        pattern = parts[1] if len(parts) > 1 else ""
+                        path = parts[2] if len(parts) > 2 else "."
+                        result = registry.execute("grep", {"pattern": pattern, "path": path})
+                        await websocket.send(json.dumps({"type":"grep_results","data":result}))
+                    elif cmd.startswith("rename:"):
+                        parts = cmd.split(":", 3)
+                        old_name = parts[1] if len(parts) > 1 else ""
+                        new_name = parts[2] if len(parts) > 2 else ""
+                        result = registry.execute("rename_symbol", {"old_name": old_name, "new_name": new_name})
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd.startswith("explain:"):
+                        code = cmd.split(":", 1)[1]
+                        result = registry.execute("explain_code", {"code": code})
+                        await websocket.send(json.dumps({"type":"explain","data":result}))
+                    elif cmd.startswith("review:"):
+                        code = cmd.split(":", 1)[1]
+                        result = registry.execute("review_code", {"code": code})
+                        await websocket.send(json.dumps({"type":"review","data":result}))
+                    elif cmd.startswith("refactor:"):
+                        code = cmd.split(":", 1)[1]
+                        result = registry.execute("refactor_code", {"code": code})
+                        await websocket.send(json.dumps({"type":"refactor","data":result}))
                     # Send any streamed lines
                     stream = _drain_stream()
                     if stream:

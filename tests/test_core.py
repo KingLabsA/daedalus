@@ -13,7 +13,7 @@ from agent_ultimate import (
     KanbanWorker, SessionStore, PluginMarketplace, ParallelExecutor,
     SubAgent, GoalManager, compress_messages, PROVIDER_CONFIGS,
     SKILLS_DIR, PLUGINS_DIR, SelfHealer, CheckpointManager,
-    CodebaseIndexer, SafetyManager, HookManager,
+    CodebaseIndexer, SafetyManager, HookManager, FileWatcher,
 )
 
 # ── ToolRegistry ─────────────────────────────────────
@@ -340,3 +340,79 @@ def test_hook_manager_list_hooks():
 def test_hook_manager_fire_nonexistent():
     HookManager.fire("nonexistent_event_xyz")
     assert True  # Should not crash
+
+# ── grep tool ──────────────────────────────────────────
+
+def test_grep_finds_pattern():
+    from agent_ultimate import registry
+    result = registry.execute("grep", {"pattern": "def test_", "path": "tests/", "max_results": "5"})
+    assert isinstance(result, str)
+    assert "test_" in result
+
+def test_grep_no_matches():
+    from agent_ultimate import registry
+    result = registry.execute("grep", {"pattern": "zzz_nonexistent_pattern_99887", "path": "/dev/null"})
+    assert "No matches" in result
+
+# ── rename_symbol tool ─────────────────────────────────
+
+def test_rename_symbol_no_matches():
+    from agent_ultimate import registry
+    result = registry.execute("rename_symbol", {"old_name": "zzz_nonexistent_symbol_99887", "new_name": "new_name", "path": "/dev/null"})
+    assert "No files contain" in result
+
+# ── explain_code tool ──────────────────────────────────
+
+def test_explain_code_basic():
+    from agent_ultimate import registry
+    result = registry.execute("explain_code", {"code": "import os\ndef hello():\n    return 42"})
+    assert "Lines: 3" in result
+    assert "hello" in result
+
+def test_explain_code_empty():
+    from agent_ultimate import registry
+    result = registry.execute("explain_code", {"code": ""})
+    assert "Lines:" in result
+
+# ── review_code tool ───────────────────────────────────
+
+def test_review_code_security():
+    from agent_ultimate import registry
+    result = registry.execute("review_code", {"code": "eval(x)\nos.system(cmd)"})
+    assert "SECURITY" in result
+    assert "eval/exec" in result
+
+def test_review_code_clean():
+    from agent_ultimate import registry
+    result = registry.execute("review_code", {"code": "x = 1\ny = x + 1"})
+    assert "No issues found" in result
+
+def test_review_code_todo():
+    from agent_ultimate import registry
+    result = registry.execute("review_code", {"code": "x = 1  # TODO: fix this"})
+    assert "NOTE" in result
+
+# ── refactor_code tool ─────────────────────────────────
+
+def test_refactor_code_deep_nesting():
+    from agent_ultimate import registry
+    code = "if a:\n    if b:\n        if c:\n            if d:\n                if e:\n                    pass"
+    result = registry.execute("refactor_code", {"code": code})
+    assert "Nesting depth" in result
+
+def test_refactor_code_clean():
+    from agent_ultimate import registry
+    result = registry.execute("refactor_code", {"code": "x = 1"})
+    assert "no refactoring suggestions" in result.lower()
+
+# ── FileWatcher ────────────────────────────────────────
+
+def test_file_watcher_status():
+    status = FileWatcher.status()
+    assert isinstance(status, dict)
+    assert "running" in status
+    assert "pending_changes" in status
+
+def test_file_watcher_stop_when_not_running():
+    result = FileWatcher.stop()
+    assert "not running" in result.lower()

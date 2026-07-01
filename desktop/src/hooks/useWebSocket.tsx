@@ -147,6 +147,15 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
           case "model":
             st.setModel(data.data);
             break;
+          case "watcher_status":
+            // could add watcher state to store if needed
+            break;
+          case "grep_results":
+          case "explain":
+          case "review":
+          case "refactor":
+            // handled by subscribers
+            break;
         }
 
         // notify subscribers
