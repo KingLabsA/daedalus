@@ -2037,6 +2037,20 @@ class UltimateAgent:
         def list_providers() -> str: return ", ".join(PROVIDER_CONFIGS.keys())
         @self.registry.register(description="Show kanban board")
         def show_kanban() -> str: return json.dumps(self.kanban.get_board_state(), indent=2)
+        @self.registry.register(description="Task board: list, add, move, remove tasks")
+        def task_board(action: str = "list", task_name: str = "", column: str = "") -> str:
+            if action == "list":
+                return json.dumps(self.kanban.get_board_state(), indent=1)
+            elif action == "add" and task_name:
+                task = self.kanban.add_task(task_name)
+                return f"Added task: {task.id} - {task.title}"
+            elif action == "move" and task_name:
+                self.kanban.move_task(task_name, column or "done")
+                return f"Moved task {task_name} to {column or 'done'}"
+            elif action == "remove" and task_name:
+                self.kanban.remove_task(task_name)
+                return f"Removed task: {task_name}"
+            return f"Unknown task action: {action}"
         @self.registry.register(description="Create a checkpoint of current changes")
         def create_checkpoint(label: str = "") -> str: return self.checkpoints.create_checkpoint(label)
         @self.registry.register(description="List all checkpoints")
