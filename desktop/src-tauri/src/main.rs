@@ -1,0 +1,93 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::process::{Command, Stdio, Child};
+use std::sync::Mutex;
+use tauri::Manager;
+
+struct AgentState {
+    process: Mutex<Option<Child>>,
+}
+
+#[tauri::command]
+fn start_agent(state: tauri::State<AgentState>) -> Result<String, String> {
+    let mut guard = state.process.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Err("Agent already running".into());
+    }
+    let child = Command::new("python3")
+        .arg("agent_ultimate.py")
+        .arg("ws")
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|e| format!("Failed to start agent: {}", e))?;
+    *guard = Some(child);
+    Ok("Agent started on ws://127.0.0.1:8765".into())
+}
+
+#[tauri::command]
+fn stop_agent(state: tauri::State<AgentState>) -> Result<String, String> {
+    let mut guard = state.process.lock().map_err(|e| e.to_string())?;
+    if let Some(mut child) = guard.take() {
+        child.kill().map_err(|e| format!("Failed to stop: {}", e))?;
+        child.wait().ok();
+        Ok("Agent stopped".into())
+    } else {
+        Err("No agent running".into())
+    }
+}
+
+#[tauri::command]
+fn agent_status(state: tauri::State<AgentState>) -> Result<String, String> {
+    let mut guard = state.process.lock().map_err(|e| e.to_string())?;
+    if let Some(child) = guard.as_mut() {
+        match child.try_wait() {
+            Ok(None) => Ok("running".into()),
+            _ => Ok("exited".into()),
+        }
+    } else {
+        Ok("stopped".into())
+    }
+}
+
+fn kill_agent(state: &AgentState) {
+    if let Ok(mut guard) = state.process.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            println!("🐍 Agent stopped");
+        }
+    }
+}
+
+fn main() {
+    let builder = tauri::Builder::default()
+        .manage(AgentState {
+            process: Mutex::new(None),
+        })
+        .setup(|app| {
+            let state: tauri::State<AgentState> = app.state();
+            let mut guard = state.process.lock().expect("mutex poisoned");
+            let child = Command::new("python3")
+                .arg("agent_ultimate.py")
+                .arg("ws")
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("Failed to spawn agent process");
+            *guard = Some(child);
+            println!("🐍 Agent auto-started on ws://127.0.0.1:8765");
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status]);
+
+    builder
+        .build(tauri::generate_context!())
+        .expect("error building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let state: tauri::State<AgentState> = app_handle.state();
+                kill_agent(&state);
+            }
+        });
+}

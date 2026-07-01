@@ -1,0 +1,1 @@
+from agent_ultimate import compress_messages
