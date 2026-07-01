@@ -12,7 +12,8 @@ from agent_ultimate import (
     ToolRegistry, SelfLearner, KanbanTask, KanbanBoard,
     KanbanWorker, SessionStore, PluginMarketplace, ParallelExecutor,
     SubAgent, GoalManager, compress_messages, PROVIDER_CONFIGS,
-    SKILLS_DIR, PLUGINS_DIR,
+    SKILLS_DIR, PLUGINS_DIR, SelfHealer, CheckpointManager,
+    CodebaseIndexer, SafetyManager, HookManager,
 )
 
 # ── ToolRegistry ─────────────────────────────────────
@@ -243,3 +244,99 @@ def test_compress_messages_long():
     result = compress_messages(msgs)
     assert len(result) < len(msgs)
     assert any("[Summary]" in m.get("content", "") for m in result)
+
+# ── SelfHealer ────────────────────────────────────────
+
+def test_self_healer_analyze_error():
+    result = SelfHealer.analyze_error("FileNotFoundError: [Errno 2] No such file or directory", "reading config")
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+def test_self_healer_auto_fix_returns_none_or_str():
+    result = SelfHealer.auto_fix("run_command", "ToolError: command not found", {"cmd": "ls"})
+    assert result is None or isinstance(result, str)
+
+# ── CheckpointManager ─────────────────────────────────
+
+def test_checkpoint_list_empty():
+    cps = CheckpointManager.list_checkpoints()
+    assert isinstance(cps, list)
+
+# ── CodebaseIndexer ───────────────────────────────────
+
+def test_indexer_stats():
+    indexer = CodebaseIndexer()
+    stats = indexer.get_stats()
+    assert "total_files" in stats
+    assert "by_extension" in stats
+    assert isinstance(stats["total_files"], int)
+
+def test_indexer_search_empty():
+    indexer = CodebaseIndexer()
+    results = indexer.search("nonexistent_query_xyz_12345")
+    assert isinstance(results, list)
+
+# ── SafetyManager ─────────────────────────────────────
+
+def test_safety_manager_auto_mode():
+    sm = SafetyManager("auto")
+    ok, reason = sm.should_approve("write_file", {"path": "test.py", "content": "x"})
+    assert ok is True
+    assert reason == "auto-mode"
+
+def test_safety_manager_suggest_mode_blocks_destructive():
+    sm = SafetyManager("suggest")
+    ok, reason = sm.should_approve("write_file", {"path": "test.py", "content": "x"})
+    assert ok is False
+    assert reason.startswith("appr-")
+
+def test_safety_manager_suggest_mode_allows_readonly():
+    sm = SafetyManager("suggest")
+    ok, reason = sm.should_approve("read_file", {"path": "test.py"})
+    assert ok is True
+    assert reason == "read-only"
+
+def test_safety_manager_approve_deny():
+    sm = SafetyManager("suggest")
+    ok, reason = sm.should_approve("write_file", {"path": "test.py", "content": "x"})
+    assert ok is False
+    assert sm.approve(reason) is True
+    assert sm.approve("nonexistent") is False
+
+def test_safety_manager_deny():
+    sm = SafetyManager("suggest")
+    ok, reason = sm.should_approve("write_file", {"path": "test.py", "content": "x"})
+    assert ok is False
+    assert sm.deny(reason) is True
+    assert sm.deny("nonexistent") is False
+
+def test_safety_manager_get_pending():
+    import time
+    sm = SafetyManager("plan")
+    ok1, id1 = sm.should_approve("git_commit", {"message": "test"})
+    time.sleep(0.01)
+    ok2, id2 = sm.should_approve("write_file", {"path": "x.py", "content": "y"})
+    assert ok1 is False
+    assert ok2 is False
+    pending = sm.get_pending()
+    assert len(pending) == 2
+    assert all(p["status"] == "pending" for p in pending)
+
+# ── HookManager ───────────────────────────────────────
+
+def test_hook_manager_register_and_fire():
+    fired = []
+    HookManager.register("pre_tool", lambda: fired.append(1))
+    HookManager.fire("pre_tool")
+    assert len(fired) == 1
+
+def test_hook_manager_list_hooks():
+    HookManager.register("post_tool", lambda: None)
+    hooks = HookManager.list_hooks()
+    assert isinstance(hooks, dict)
+    assert "pre_tool" in hooks
+    assert hooks["pre_tool"] >= 1
+
+def test_hook_manager_fire_nonexistent():
+    HookManager.fire("nonexistent_event_xyz")
+    assert True  # Should not crash

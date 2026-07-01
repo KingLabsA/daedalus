@@ -117,7 +117,7 @@ export default function SettingsPanel() {
 
   const handleRollback = (id: string) => {
     if (confirm("Rollback to this checkpoint? This will undo changes.")) {
-      sendCommand(`checkpoint:rollback:${id}`);
+      sendCommand(`checkpoint:restore:${id}`);
     }
   };
 

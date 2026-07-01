@@ -49,6 +49,7 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
         ws.send(JSON.stringify({ type: "command", command: "checkpoints" }));
         ws.send(JSON.stringify({ type: "command", command: "index:stats" }));
         ws.send(JSON.stringify({ type: "command", command: "safety:status" }));
+        ws.send(JSON.stringify({ type: "command", command: "safety:pending" }));
       };
 
     ws.onmessage = (event) => {

@@ -1497,7 +1497,15 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"notification", "content":f"Registered hook for {event}"}))
                     elif cmd == "checkpoints":
                         cps = CheckpointManager.list_checkpoints()
-                        await websocket.send(json.dumps({"type":"checkpoints", "data":cps}))
+                        transformed = []
+                        for cp in cps:
+                            transformed.append({
+                                "id": cp.get("label", ""),
+                                "label": cp.get("label", ""),
+                                "timestamp": cp.get("timestamp", ""),
+                                "filesChanged": cp.get("files_changed", 0),
+                            })
+                        await websocket.send(json.dumps({"type":"checkpoints", "data":transformed}))
                     elif cmd.startswith("checkpoint:create:"):
                         label = cmd.split(":", 2)[2] if len(cmd.split(":")) > 2 else ""
                         result = CheckpointManager.create_checkpoint(label)
@@ -1519,14 +1527,43 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"search_results", "data":results}))
                     elif cmd == "index:stats":
                         stats = self.agent.indexer.get_stats()
-                        await websocket.send(json.dumps({"type":"index_stats", "data":stats}))
+                        await websocket.send(json.dumps({"type":"index_stats", "data":{
+                            "totalFiles": stats.get("total_files", 0),
+                            "totalChunks": sum(stats.get("by_extension", {}).values()),
+                            "lastUpdated": None,
+                        }}))
                     elif cmd.startswith("safety:mode:"):
                         mode = cmd.split(":", 2)[2]
                         self.agent.safety.mode = mode
                         await websocket.send(json.dumps({"type":"safety_mode", "data":mode}))
                     elif cmd == "safety:pending":
                         pending = self.agent.safety.get_pending()
-                        await websocket.send(json.dumps({"type":"safety_pending", "data":pending}))
+                        transformed = []
+                        for p in pending:
+                            transformed.append({
+                                "id": p.get("id", ""),
+                                "tool": p.get("tool", ""),
+                                "args": p.get("args", {}),
+                                "timestamp": p.get("timestamp", ""),
+                            })
+                        await websocket.send(json.dumps({"type":"pending_approvals","data":transformed}))
+                    elif cmd == "safety:status":
+                        await websocket.send(json.dumps({"type":"safety_mode","data":self.agent.safety.mode}))
+                    elif cmd.startswith("suggest:confirm:"):
+                        wid = cmd.split(":", 2)[2]
+                        result = registry.execute("confirm_write", {"write_id": wid})
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd.startswith("suggest:deny:"):
+                        wid = cmd.split(":", 2)[2]
+                        result = registry.execute("deny_write", {"write_id": wid})
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd == "index:reindex":
+                        result = self.agent.indexer.index_project()
+                        await websocket.send(json.dumps({"type":"notification","content":result}))
+                    elif cmd.startswith("index:search:"):
+                        query = cmd.split(":", 2)[2]
+                        results = self.agent.indexer.search(query)
+                        await websocket.send(json.dumps({"type":"index_results","data":results}))
                     elif cmd.startswith("model:"):
                         model = cmd.split(":", 1)[1]
                         os.environ["MODEL_NAME"] = model
