@@ -1182,6 +1182,7 @@ PROVIDER_CONFIGS = {
     "anthropic":  {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-3-5-sonnet-20241022"},
     "openrouter": {"env": "OPENROUTER_API_KEY",   "lib": "openai",     "base": "https://openrouter.ai/api/v1", "default_model": "openai/gpt-4o-mini"},
     "ollama":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "qwen2.5-coder:7b"},
+    "hermes":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "hermes3:8b", "description": "Nous Hermes 3 via Ollama — uncensored, tool-use, reasoning"},
     "google":     {"env": "GOOGLE_API_KEY",       "lib": "google.generativeai", "default_model": "gemini-1.5-pro"},
     "groq":       {"env": "GROQ_API_KEY",         "lib": "openai",     "base": "https://api.groq.com/openai/v1", "default_model": "llama3-70b-8192"},
     "xai":        {"env": "XAI_API_KEY",          "lib": "openai",     "base": "https://api.x.ai/v1", "default_model": "grok-2-1212"},
@@ -1208,8 +1209,9 @@ def _get_provider_client(provider: str = None):
     mod = importlib.import_module(lib)
     client_class_name = cfg.get("client", "OpenAI")
     ClientClass = getattr(mod, client_class_name)
-    api_key = os.getenv(cfg["env"]) if cfg.get("env") else "none"
+    api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
     base = cfg.get("base")
+    if base and not api_key: api_key = "ollama"  # Ollama doesn't need a real key
     if base: return ClientClass(api_key=api_key, base_url=base)
     return ClientClass(api_key=api_key) if api_key else ClientClass()
 
@@ -1226,6 +1228,7 @@ class ProviderRouter:
 
         if cfg.get("lib") == "openai":
             import openai
+            if base and not api_key: api_key = "ollama"  # Ollama doesn't need a real key
             client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
             om = []
             for m in messages:
@@ -1288,6 +1291,7 @@ class ProviderRouter:
             # Generic OpenAI-compatible fallback
             try:
                 import openai
+                if base and not api_key: api_key = "ollama"
                 client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
                 om = [{"role": m["role"], "content": m.get("content","")} for m in messages if m["role"] in ("system","user","assistant")]
                 resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None)
@@ -1308,6 +1312,7 @@ class ProviderRouter:
 
         if cfg.get("lib") == "openai":
             import openai
+            if base and not api_key: api_key = "ollama"  # Ollama doesn't need a real key
             client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
             om = []
             for m in messages:
