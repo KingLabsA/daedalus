@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 from core.context import ContextEngine
+from core.cognition import EventLog, Dreamer, Distiller, GoalJudge, Subconscious
 
 load_dotenv()
 
@@ -1809,6 +1810,13 @@ class WebSocketServer:
                         q = cmd.split(":", 2)[2]
                         hits = self.agent.context.recall(q)
                         await websocket.send(json.dumps({"type":"memory", "data":[{"kind": h["kind"], "content": h["content"]} for h in hits]}))
+                    elif cmd == "dream":
+                        report = self.agent.dreamer.dream(self.agent._recent_sessions(), use_llm=True)
+                        await websocket.send(json.dumps({"type":"dream", "data":report}))
+                    elif cmd == "distill":
+                        await websocket.send(json.dumps({"type":"distill", "data":self.agent.distiller.distill()}))
+                    elif cmd == "subconscious":
+                        await websocket.send(json.dumps({"type":"subconscious", "data":self.agent.subconscious.status()}))
                     elif cmd == "system_prompt":
                         await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
                     elif cmd.startswith("system_prompt:set:"):
@@ -2014,10 +2022,25 @@ class UltimateAgent:
         self.indexer = CodebaseIndexer()
         self.context = ContextEngine(db_path=DB_FILE, session_id=self.session_id, summarize_fn=_ctx_summarize)
         self.context.attach(HookManager)
+        self.events = EventLog(DB_FILE, self.session_id)
+        self.events.attach(HookManager)
+        self.dreamer = Dreamer(self.context.store, llm_fn=_ctx_summarize)
+        self.distiller = Distiller(self.events, SelfLearner.save_skill)
+        self.judge = GoalJudge(llm_fn=_ctx_summarize)
+        self.subconscious = Subconscious(self.dreamer, self.distiller, session_loader=self._recent_sessions)
+        self.subconscious.attach(HookManager)
+        self.subconscious.start()
         skills = SelfLearner.load_skills()
         skills_str = f"\nAvailable skills: {', '.join(skills)}" if skills else ""
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{skills_str}"
         self._register_advanced_tools()
+    def _recent_sessions(self, k: int = 5) -> List[List[Dict]]:
+        out = []
+        for sid in self.store.list_sessions()[:k]:
+            msgs = self.store.load(sid)
+            if msgs:
+                out.append(msgs)
+        return out
     def _register_advanced_tools(self):
         @self.registry.register(description="Spawn a sub-agent for a task")
         def spawn_subagent(name: str, task: str) -> str:
@@ -2102,6 +2125,15 @@ class UltimateAgent:
         @self.registry.register(description="Show persistent memory statistics")
         def memory_stats() -> str:
             return json.dumps(self.context.stats(), indent=1)
+        @self.registry.register(description="Dream now: consolidate recent session experience into persistent memory")
+        def dream_now() -> str:
+            return json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)
+        @self.registry.register(description="Distill now: mine repeated tool workflows into reusable skills")
+        def distill_now() -> str:
+            return json.dumps(self.distiller.distill(), indent=1)
+        @self.registry.register(description="Show subconscious (sleep-time compute) status")
+        def subconscious_status() -> str:
+            return json.dumps(self.subconscious.status(), indent=1)
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -2162,8 +2194,14 @@ class UltimateAgent:
             for res in results:
                 self.messages.append({"role": "tool", "tool_call_id": res["id"], "content": res["result"]})
             if self.goal_manager and self.goal_manager.is_complete(response.content or ""):
-                HookManager.fire("on_stop")
-                return f"Goal Complete: {self.goal_manager.goal}"
+                verdict = self.judge.verdict(self.goal_manager.goal, self.messages)
+                if verdict.get("complete", True):
+                    HookManager.fire("on_stop")
+                    suffix = f" (judge: {verdict['reason'][:120]})" if verdict.get("reason") else ""
+                    return f"Goal Complete: {self.goal_manager.goal}{suffix}"
+                self.goal_manager.completed = False
+                self.logs.append({"type": "judge_rejection", "reason": verdict.get("reason", ""), "iteration": i})
+                self.messages.append({"role": "user", "content": f"[JUDGE] Goal NOT satisfied: {verdict.get('reason', 'insufficient evidence of completion')}. Continue working until truly complete."})
         HookManager.fire("on_stop")
         return "Max iterations reached."
     def chat(self):
@@ -2172,7 +2210,7 @@ class UltimateAgent:
         print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
         print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
         print(f"Safety mode: {self.safety.mode}")
-        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, exit\n")
+        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, /dream, /distill, /subconscious, exit\n")
         while True:
             try: u = input("You: ").strip()
             except (EOFError, KeyboardInterrupt): break
@@ -2228,6 +2266,12 @@ class UltimateAgent:
             if u.startswith("/search"):
                 query = u.split(" ", 1)[1] if " " in u else ""
                 print(json.dumps(self.indexer.search(query), indent=2)); continue
+            if u == "/dream":
+                print(json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)); continue
+            if u == "/distill":
+                print(json.dumps(self.distiller.distill(), indent=1)); continue
+            if u == "/subconscious":
+                print(json.dumps(self.subconscious.status(), indent=1)); continue
             if u.startswith("/remember"):
                 text = u.split(" ", 1)[1] if " " in u else ""
                 if text: print(self.context.remember(text))
