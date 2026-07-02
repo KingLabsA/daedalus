@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
+from core.context import ContextEngine
+
 load_dotenv()
 
 # ============== SECURITY CONSTRAINTS ==============
@@ -1578,6 +1580,14 @@ def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str 
     if system_msg: compressed.insert(0, system_msg)
     return compressed
 
+def _ctx_summarize(prompt: str) -> str:
+    """Cheap LLM call used by the ContextEngine for checkpoint summaries."""
+    cfg = PROVIDER_CONFIGS.get(LLM_PROVIDER, {})
+    client = _get_provider_client(LLM_PROVIDER)
+    model = cfg.get("default_model", "gpt-4o-mini")
+    resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], max_tokens=300)
+    return resp.choices[0].message.content or ""
+
 # ============== PLUGIN MARKETPLACE ==============
 class PluginMarketplace:
     PLUGIN_MANIFEST_FIELDS = {"name", "version", "description", "author", "tools", "min_agent_version"}
@@ -1793,6 +1803,12 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"provider_test_result", "data":result}))
                     elif cmd == "cost":
                         await websocket.send(json.dumps({"type":"cost", "data":_get_cost_summary()}))
+                    elif cmd == "memory":
+                        await websocket.send(json.dumps({"type":"memory", "data":self.agent.context.stats()}))
+                    elif cmd.startswith("memory:search:"):
+                        q = cmd.split(":", 2)[2]
+                        hits = self.agent.context.recall(q)
+                        await websocket.send(json.dumps({"type":"memory", "data":[{"kind": h["kind"], "content": h["content"]} for h in hits]}))
                     elif cmd == "system_prompt":
                         await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
                     elif cmd.startswith("system_prompt:set:"):
@@ -1996,9 +2012,11 @@ class UltimateAgent:
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
         self.indexer = CodebaseIndexer()
+        self.context = ContextEngine(db_path=DB_FILE, session_id=self.session_id, summarize_fn=_ctx_summarize)
+        self.context.attach(HookManager)
         skills = SelfLearner.load_skills()
         skills_str = f"\nAvailable skills: {', '.join(skills)}" if skills else ""
-        self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. Be concise and self-correcting.{skills_str}"
+        self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{skills_str}"
         self._register_advanced_tools()
     def _register_advanced_tools(self):
         @self.registry.register(description="Spawn a sub-agent for a task")
@@ -2072,6 +2090,18 @@ class UltimateAgent:
         def set_safety_mode(mode: str) -> str:
             self.safety.mode = mode
             return f"Safety mode set to: {mode}"
+        @self.registry.register(description="Save an important fact, decision, or preference to persistent cross-session memory. kind: project|decision|note|preference, importance: 0.0-1.0")
+        def remember(content: str, kind: str = "project", importance: str = "0.7") -> str:
+            return self.context.remember(content, kind, float(importance))
+        @self.registry.register(description="Search persistent cross-session memory")
+        def recall_memory(query: str, k: str = "5") -> str:
+            hits = self.context.recall(query, int(k))
+            if not hits:
+                return "No matching memories."
+            return json.dumps([{"id": h["id"], "kind": h["kind"], "content": h["content"]} for h in hits], indent=1)
+        @self.registry.register(description="Show persistent memory statistics")
+        def memory_stats() -> str:
+            return json.dumps(self.context.stats(), indent=1)
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -2142,7 +2172,7 @@ class UltimateAgent:
         print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
         print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
         print(f"Safety mode: {self.safety.mode}")
-        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, exit\n")
+        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, exit\n")
         while True:
             try: u = input("You: ").strip()
             except (EOFError, KeyboardInterrupt): break
@@ -2198,6 +2228,19 @@ class UltimateAgent:
             if u.startswith("/search"):
                 query = u.split(" ", 1)[1] if " " in u else ""
                 print(json.dumps(self.indexer.search(query), indent=2)); continue
+            if u.startswith("/remember"):
+                text = u.split(" ", 1)[1] if " " in u else ""
+                if text: print(self.context.remember(text))
+                else: print("Usage: /remember <fact>")
+                continue
+            if u.startswith("/memory"):
+                query = u.split(" ", 1)[1] if " " in u else ""
+                if query:
+                    hits = self.context.recall(query)
+                    print(json.dumps([{"kind": h["kind"], "content": h["content"]} for h in hits], indent=1) if hits else "No matching memories.")
+                else:
+                    print(json.dumps(self.context.stats(), indent=1))
+                continue
             if u.startswith("/safety"):
                 parts = u.split()
                 if len(parts) >= 2:
