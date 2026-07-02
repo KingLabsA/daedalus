@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 
 from core.context import ContextEngine
 from core.cognition import EventLog, Dreamer, Distiller, GoalJudge, Subconscious
+from core.intel import CodeIntel, SemanticIndex, CausalWorldModel, WorldModelSentinel
+from core.senses import ModelOrchestra, Vision, VoiceIO
 
 load_dotenv()
 
@@ -1581,6 +1583,41 @@ def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str 
     if system_msg: compressed.insert(0, system_msg)
     return compressed
 
+def _available_providers() -> list:
+    out = []
+    for name, cfg in PROVIDER_CONFIGS.items():
+        env_key = cfg.get("env", "")
+        if not env_key or os.getenv(env_key):
+            out.append(name)
+    return out
+
+def _plain_llm_call(provider: str, prompt: str) -> str:
+    resp = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider)
+    return resp.content or ""
+
+def _vision_call(messages: list) -> str:
+    provider = os.getenv("HERMES_VISION_PROVIDER", LLM_PROVIDER)
+    cfg = PROVIDER_CONFIGS.get(provider, {})
+    client = _get_provider_client(provider)
+    model = os.getenv("HERMES_VISION_MODEL", cfg.get("default_model", "gpt-4o-mini"))
+    resp = client.chat.completions.create(model=model, messages=messages, max_tokens=1000)
+    return resp.choices[0].message.content or ""
+
+def _asr_call(audio_path: str) -> str:
+    provider = os.getenv("HERMES_ASR_PROVIDER", "openai")
+    client = _get_provider_client(provider)
+    with open(audio_path, "rb") as fh:
+        resp = client.audio.transcriptions.create(model=os.getenv("HERMES_ASR_MODEL", "whisper-1"), file=fh)
+    return resp.text
+
+def _tts_call(text: str) -> bytes:
+    provider = os.getenv("HERMES_TTS_PROVIDER", "openai")
+    client = _get_provider_client(provider)
+    resp = client.audio.speech.create(
+        model=os.getenv("HERMES_TTS_MODEL", "tts-1"), voice=os.getenv("HERMES_TTS_VOICE", "alloy"), input=text[:4000]
+    )
+    return resp.content
+
 def _ctx_summarize(prompt: str) -> str:
     """Cheap LLM call used by the ContextEngine for checkpoint summaries."""
     cfg = PROVIDER_CONFIGS.get(LLM_PROVIDER, {})
@@ -1817,6 +1854,11 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"distill", "data":self.agent.distiller.distill()}))
                     elif cmd == "subconscious":
                         await websocket.send(json.dumps({"type":"subconscious", "data":self.agent.subconscious.status()}))
+                    elif cmd == "experts":
+                        await websocket.send(json.dumps({"type":"experts", "data":{"available": _available_providers(), "profiles": self.agent.orchestra.profiles}}))
+                    elif cmd.startswith("blast:"):
+                        target = cmd.split(":", 1)[1]
+                        await websocket.send(json.dumps({"type":"blast", "data":self.agent.world_model.blast_radius(target)}))
                     elif cmd == "system_prompt":
                         await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
                     elif cmd.startswith("system_prompt:set:"):
@@ -2030,6 +2072,14 @@ class UltimateAgent:
         self.subconscious = Subconscious(self.dreamer, self.distiller, session_loader=self._recent_sessions)
         self.subconscious.attach(HookManager)
         self.subconscious.start()
+        self.code_intel = CodeIntel()
+        self.sem_index = SemanticIndex()
+        self.world_model = CausalWorldModel()
+        self.wm_sentinel = WorldModelSentinel(self.world_model)
+        self.wm_sentinel.attach(HookManager)
+        self.orchestra = ModelOrchestra(call_fn=_plain_llm_call, available_fn=_available_providers)
+        self.vision = Vision(vision_chat_fn=_vision_call)
+        self.voice = VoiceIO(transcribe_fn=_asr_call, tts_fn=_tts_call)
         skills = SelfLearner.load_skills()
         skills_str = f"\nAvailable skills: {', '.join(skills)}" if skills else ""
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{skills_str}"
@@ -2134,6 +2184,45 @@ class UltimateAgent:
         @self.registry.register(description="Show subconscious (sleep-time compute) status")
         def subconscious_status() -> str:
             return json.dumps(self.subconscious.status(), indent=1)
+        @self.registry.register(description="List functions/classes in a source file with line numbers")
+        def code_symbols(filepath: str) -> str:
+            return json.dumps(self.code_intel.symbols(filepath), indent=1)
+        @self.registry.register(description="Find where a function/class is defined across the codebase")
+        def find_definition(name: str) -> str:
+            return json.dumps(self.code_intel.find_definition(name), indent=1)
+        @self.registry.register(description="Find all references to a symbol across the codebase")
+        def find_references(name: str, max_results: str = "50") -> str:
+            return json.dumps(self.code_intel.references(name, int(max_results)), indent=1)
+        @self.registry.register(description="Semantic (TF-IDF) code search — better than keyword grep for concepts")
+        def semantic_search(query: str, k: str = "8") -> str:
+            return json.dumps(self.sem_index.search(query, int(k)), indent=1)
+        @self.registry.register(description="Build/refresh the causal world model from git history and imports")
+        def build_world_model() -> str:
+            return json.dumps(self.world_model.build(), indent=1)
+        @self.registry.register(description="Predict blast radius of editing a file: risk score, importers, co-change history")
+        def predict_blast_radius(filepath: str) -> str:
+            return json.dumps(self.world_model.blast_radius(filepath), indent=1)
+        @self.registry.register(description="Route a question to the best expert model (MoE routing across providers). task_type: code|reasoning|vision|cheap|creative|long_context|search or blank for auto")
+        def consult_expert(prompt: str, task_type: str = "") -> str:
+            return json.dumps(self.orchestra.consult(prompt, task_type), indent=1)
+        @self.registry.register(description="Ask a committee of N different expert models and synthesize the best answer")
+        def expert_committee(prompt: str, n: str = "3") -> str:
+            return json.dumps(self.orchestra.committee(prompt, int(n)), indent=1)
+        @self.registry.register(description="Analyze an image file with a vision model")
+        def analyze_image(filepath: str, question: str = "Describe this image in detail.") -> str:
+            return self.vision.analyze_image(filepath, question)
+        @self.registry.register(description="Analyze a video file: samples frames with ffmpeg, describes them with a vision model")
+        def analyze_video(filepath: str, question: str = "What happens in this video?") -> str:
+            return self.vision.analyze_video(filepath, question)
+        @self.registry.register(description="Transcribe an audio file to text")
+        def transcribe_audio(filepath: str) -> str:
+            return self.voice.transcribe(filepath)
+        @self.registry.register(description="Record from the microphone for N seconds and transcribe")
+        def listen(seconds: str = "5") -> str:
+            return self.voice.listen(int(seconds))
+        @self.registry.register(description="Speak text out loud via TTS")
+        def speak(text: str) -> str:
+            return self.voice.speak(text)
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -2210,7 +2299,7 @@ class UltimateAgent:
         print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
         print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
         print(f"Safety mode: {self.safety.mode}")
-        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, /dream, /distill, /subconscious, exit\n")
+        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, /dream, /distill, /subconscious, /blast, /experts, /see, /say, /listen, exit\n")
         while True:
             try: u = input("You: ").strip()
             except (EOFError, KeyboardInterrupt): break
@@ -2266,6 +2355,33 @@ class UltimateAgent:
             if u.startswith("/search"):
                 query = u.split(" ", 1)[1] if " " in u else ""
                 print(json.dumps(self.indexer.search(query), indent=2)); continue
+            if u.startswith("/blast"):
+                target = u.split(" ", 1)[1] if " " in u else ""
+                if target: print(json.dumps(self.world_model.blast_radius(target), indent=1))
+                else: print("Usage: /blast <file>")
+                continue
+            if u.startswith("/experts"):
+                rest = u.split(" ", 1)[1] if " " in u else ""
+                if rest: print(json.dumps(self.orchestra.committee(rest), indent=1))
+                else: print(json.dumps({"available": _available_providers(), "profiles": self.orchestra.profiles}, indent=1))
+                continue
+            if u.startswith("/see"):
+                parts = u.split(" ", 2)
+                if len(parts) >= 2: print(self.vision.analyze_image(parts[1], parts[2] if len(parts) > 2 else "Describe this image in detail."))
+                else: print("Usage: /see <image> [question]")
+                continue
+            if u.startswith("/say"):
+                text = u.split(" ", 1)[1] if " " in u else ""
+                print(self.voice.speak(text) if text else "Usage: /say <text>"); continue
+            if u.startswith("/listen"):
+                parts = u.split()
+                secs = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5
+                heard = self.voice.listen(secs)
+                print(f"Heard: {heard}")
+                if heard and not heard.endswith(("not configured.", "failed.")) and "not " not in heard[:30]:
+                    result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":heard}])
+                    print(f"\n{result}\n")
+                continue
             if u == "/dream":
                 print(json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)); continue
             if u == "/distill":
