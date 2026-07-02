@@ -4,8 +4,8 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "hermes-ultimate"
-version = "0.2.0"
-description = "Production-grade autonomous coding agent with safety modes, codebase indexing, git checkpoints, and 20+ LLM providers"
+version = "1.0.0"
+description = "Self-evolving multimodal coding assistant: persistent memory, failure immunity, sleep-time compute, causal world model, MoE expert routing, calibrated confidence, MCP client, and 22 LLM providers"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0",

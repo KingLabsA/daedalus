@@ -1805,10 +1805,14 @@ class WebSocketServer:
                         cfg = PROVIDER_CONFIGS.get(cur, {})
                         models = cfg.get("models", [cfg.get("default_model", "unknown")])
                         await websocket.send(json.dumps({"type":"models", "data":{"provider": cur, "models": models, "current": os.environ.get("MODEL_NAME", cfg.get("default_model", ""))}}))
-                    elif cmd.startswith("provider:"):
+                    elif cmd.startswith("provider:") and not cmd.startswith("provider:test:"):
                         p = cmd.split(":")[1]
-                        self.agent.provider = p
-                        await websocket.send(json.dumps({"type":"provider", "data":p}))
+                        if p in PROVIDER_CONFIGS:
+                            self.agent.provider = p
+                            self.agent._provider_pinned = True
+                            await websocket.send(json.dumps({"type":"provider", "data":p}))
+                        else:
+                            await websocket.send(json.dumps({"type":"notification", "content":f"Unknown provider: {p}"}))
                     elif cmd == "logs":
                         await websocket.send(json.dumps({"type":"logs", "data":self.agent.logs[-200:]}))
                     elif cmd == "undo":
@@ -2091,6 +2095,7 @@ class UltimateAgent:
         self.goal_manager: Optional[GoalManager] = None; self.kanban = KanbanBoard()
         self.browser = AdvancedBrowser(); self.desktop = DesktopController()
         self.provider = LLM_PROVIDER
+        self._provider_pinned = False
         self.logs: List[Dict] = []
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
@@ -2139,6 +2144,23 @@ class UltimateAgent:
             persona_str = f"\n{addendum}"
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
+    def _route_provider(self, user_text: str) -> Tuple[str, Optional[int]]:
+        """Cost-aware auto-routing for a run: returns (provider, tier or None).
+        Disabled via HERMES_AUTO_ROUTE=off, or when the user pinned a provider."""
+        if os.getenv("HERMES_AUTO_ROUTE", "on").lower() in ("off", "0", "false"):
+            return self.provider, None
+        if getattr(self, "_provider_pinned", False) or not user_text:
+            return self.provider, None
+        try:
+            decision = self.router.route(user_text)
+        except Exception:
+            return self.provider, None
+        routed = decision.get("provider")
+        if not routed or routed == self.provider:
+            return self.provider, None
+        self.logs.append({"type": "auto_route", "provider": routed, "tier": decision.get("tier"),
+                          "difficulty": decision.get("difficulty"), "reason": decision.get("reason", "")})
+        return routed, decision.get("tier")
     def _record_tool_outcomes(self, results: Optional[List[Dict]] = None, **kwargs):
         try:
             for res in results or []:
@@ -2190,7 +2212,9 @@ class UltimateAgent:
             return json.dumps(ParallelExecutor.run(json.loads(tasks_json), self), indent=2)
         @self.registry.register(description="Switch LLM provider at runtime")
         def switch_provider(provider: str) -> str:
-            if provider in PROVIDER_CONFIGS: self.provider = provider; return f"Switched to {provider}"
+            if provider in PROVIDER_CONFIGS:
+                self.provider = provider; self._provider_pinned = True
+                return f"Switched to {provider} (auto-routing paused; HERMES_AUTO_ROUTE governs)"
             return f"Unknown provider. Available: {', '.join(PROVIDER_CONFIGS.keys())}"
         @self.registry.register(description="List all available providers")
         def list_providers() -> str: return ", ".join(PROVIDER_CONFIGS.keys())
@@ -2331,13 +2355,21 @@ class UltimateAgent:
                 return "Blocked: possible prompt injection detected."
         self.logs.append({"type": "run_start", "timestamp": time.time(), "iterations": 0})
         HookManager.fire("on_start")
+        last_user = next((str(m.get("content") or "") for m in reversed(self.messages) if m.get("role") == "user"), "")
+        loop_provider, route_tier = self._route_provider(last_user)
         for i in range(max_iters):
             self.logs.append({"type": "llm_call", "iteration": i, "timestamp": time.time()})
             HookManager.fire("pre_llm", messages=self.messages)
             schemas = self.registry.get_openai_schemas()
-            try: response = ProviderRouter.call(self.messages, schemas, self.provider)
+            try: response = ProviderRouter.call(self.messages, schemas, loop_provider)
             except Exception as e:
                 HookManager.fire("on_error", error=str(e))
+                if route_tier is not None:
+                    self.router.record_outcome(route_tier, success=False)
+                if loop_provider != self.provider:
+                    # routed provider failed — retry the loop on the user's provider
+                    loop_provider, route_tier = self.provider, None
+                    continue
                 return f"LLM Error: {e}"
             self.messages.append({"role": "assistant", "content": response.content or ""})
             HookManager.fire("post_llm", content=response.content, tool_calls=getattr(response, "tool_calls", []))
@@ -2345,6 +2377,8 @@ class UltimateAgent:
             if not tcs:
                 self.logs.append({"type": "llm_response", "iteration": i, "content": (response.content or "")[:200]})
                 HookManager.fire("on_stop")
+                if route_tier is not None:
+                    self.router.record_outcome(route_tier, success=True)
                 return response.content or "No response"
             calls = []
             for tc in tcs:
@@ -2439,7 +2473,7 @@ class UltimateAgent:
                 self.messages = [{"role":"system","content":self.system_prompt}]; print("Reset."); continue
             if u.startswith("/provider"):
                 p = u.split(" ", 1)[1] if " " in u else ""
-                if p in PROVIDER_CONFIGS: self.provider = p; print(f"Switched to {p}")
+                if p in PROVIDER_CONFIGS: self.provider = p; self._provider_pinned = True; print(f"Switched to {p} (pinned — auto-routing off for this session)")
                 else: print(f"Available: {', '.join(PROVIDER_CONFIGS.keys())}")
                 continue
             if u.startswith("/kanban"):

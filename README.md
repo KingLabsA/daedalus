@@ -1,6 +1,22 @@
-# Hermes Ultimate
+# Hermes Ultimate — Deep Mind Edition
 
-A production-grade autonomous coding agent with 21 providers, 55 tools, self-learning, kanban orchestration, plugin marketplace, Docker sandboxing, safety modes, codebase indexing, git checkpoints, lifecycle hooks, and a standalone Tauri 2 desktop app.
+A self-evolving, multimodal coding assistant built on an autonomous agent core. 83 tools, 22 providers, and a cognitive stack no other assistant ships:
+
+- **Persistent memory + context reconstruction** — remembers across sessions; rebuilds context from structured checkpoints instead of truncating ([spec](docs/superpowers/specs/2026-07-02-hermes-deep-mind-design.md))
+- **Failure Immune System** — every failure becomes an antibody; it cannot repeat a mistake it has already made
+- **Subconscious (sleep-time compute)** — dreams session experience into memory and distills repeated workflows into skills while idle
+- **Judge-verified goals** — an independent model must confirm a `/goal` is truly complete
+- **Causal World Model** — predicts the blast radius of an edit from git co-change history before making it
+- **Model Orchestra (agent-level MoE)** — classifies each task and routes it to the best expert among 22 providers; committees + judged Max Mode best-of-N
+- **Epistemic Engine** — records predicted confidence vs actual outcomes; cost-aware auto-routing driven by *learned* calibration (easy → free local model, hard → Claude Fable 5)
+- **Senses** — image analysis, video understanding (ffmpeg frame sampling), voice in (`/listen`) and out (`/say`)
+- **Native MCP client** — connect any Model Context Protocol server via `.hermes/mcp.json`
+- **Device doctor + model advisor** — scans the machine for missing dependencies; recommends exactly which models this hardware can run
+- **Profile builder** — first launch interviews you (developer, PM, doctor, engineer, …) and pre-builds persona skill packs
+
+Plus the original core: self-learning, kanban multi-agent orchestration, plugin marketplace, Docker sandboxing, safety modes, git checkpoints, lifecycle hooks, and a desktop app (React + Tauri 2) with a **Mind** dashboard.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full six-phase build.
 
 ## Quick Start
 
@@ -120,6 +136,22 @@ cd desktop && npm run dev
 | `/search <query>` | Search the codebase index |
 | `/safety [mode]` | Get/set safety mode (suggest/plan/auto) |
 | `/reset` | Clear conversation |
+| `/memory [query]` | Memory stats or search persistent memory |
+| `/remember <fact>` | Save a fact to persistent memory |
+| `/dream` | Consolidate recent sessions into memory |
+| `/distill` | Mine repeated workflows into skills |
+| `/subconscious` | Sleep-time compute status |
+| `/blast <file>` | Predict blast radius of editing a file |
+| `/experts [prompt]` | Expert providers / ask a committee |
+| `/max <prompt>` | Judged best-of-N across providers |
+| `/route <prompt>` | Show cost-aware routing decision |
+| `/calibration` | Predicted-vs-actual confidence report |
+| `/see <image> [q]` | Analyze an image |
+| `/say <text>` / `/listen [s]` | Voice out / voice in |
+| `/doctor` | Scan device for missing dependencies |
+| `/models` | Models this machine can run |
+| `/profile [rebuild]` | Show / rebuild your persona profile |
+| `/mcp list\|tools\|call` | MCP servers, tools, invocation |
 
 ## WebSocket Protocol
 
