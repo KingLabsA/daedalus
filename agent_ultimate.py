@@ -12,6 +12,13 @@ from core.context import ContextEngine
 from core.cognition import EventLog, Dreamer, Distiller, GoalJudge, Subconscious
 from core.intel import CodeIntel, SemanticIndex, CausalWorldModel, WorldModelSentinel
 from core.senses import ModelOrchestra, Vision, VoiceIO
+from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
+from core.platform import McpClient, DependencyScanner, ProfileBuilder, ModelAdvisor
+
+# Fable 5 leads the reasoning/creative expert profiles when its key is present
+for _profile_name in ("reasoning", "creative", "long_context"):
+    if "fable" not in _ORCHESTRA_PROFILES[_profile_name]:
+        _ORCHESTRA_PROFILES[_profile_name].insert(0, "fable")
 
 load_dotenv()
 
@@ -488,12 +495,7 @@ def process_image(filepath: str) -> str:
 @registry.register(description="Call an MCP server tool. Pass server name, tool name, and arguments as JSON string.")
 def mcp_call(server: str, tool: str, arguments: str = "{}") -> str:
     try:
-        args = json.loads(arguments)
-        cmd = ["mcp", "call", server, tool] if not args else ["mcp", "call", server, tool, "-a", json.dumps(args)]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        return r.stdout or r.stderr or "(no output)"
-    except FileNotFoundError:
-        return "MCP CLI not installed. Install: pip install mcp"
+        return _mcp_client().call_tool(server, tool, json.loads(arguments or "{}"))
     except Exception as e:
         return f"mcp call error: {e}"
 
@@ -1184,7 +1186,8 @@ class SafetyManager:
 # ============== PROVIDERS ==============
 PROVIDER_CONFIGS = {
     "openai":     {"env": "OPENAI_API_KEY",       "lib": "openai",     "client": "OpenAI",     "default_model": "gpt-4o-mini"},
-    "anthropic":  {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-3-5-sonnet-20241022"},
+    "anthropic":  {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-3-5-sonnet-20241022", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022"]},
+    "fable":      {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-fable-5", "description": "Claude Fable 5 — Anthropic's Mythos-class frontier model", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"]},
     "openrouter": {"env": "OPENROUTER_API_KEY",   "lib": "openai",     "base": "https://openrouter.ai/api/v1", "default_model": "openai/gpt-4o-mini"},
     "ollama":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "qwen2.5-coder:7b"},
     "hermes":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "hermes3:8b", "description": "Nous Hermes 3 via Ollama — uncensored, tool-use, reasoning", "models": ["hermes3:3b", "hermes3:8b", "hermes3:70b", "hermes3:405b"]},
@@ -1583,6 +1586,13 @@ def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str 
     if system_msg: compressed.insert(0, system_msg)
     return compressed
 
+_MCP_SINGLETON = None
+def _mcp_client():
+    global _MCP_SINGLETON
+    if _MCP_SINGLETON is None:
+        _MCP_SINGLETON = McpClient()
+    return _MCP_SINGLETON
+
 def _available_providers() -> list:
     out = []
     for name, cfg in PROVIDER_CONFIGS.items():
@@ -1859,6 +1869,24 @@ class WebSocketServer:
                     elif cmd.startswith("blast:"):
                         target = cmd.split(":", 1)[1]
                         await websocket.send(json.dumps({"type":"blast", "data":self.agent.world_model.blast_radius(target)}))
+                    elif cmd == "doctor":
+                        await websocket.send(json.dumps({"type":"doctor", "data":self.agent.doctor.scan()}))
+                    elif cmd == "advisor":
+                        await websocket.send(json.dumps({"type":"advisor", "data":self.agent.model_advisor.advise()}))
+                    elif cmd == "profile":
+                        await websocket.send(json.dumps({"type":"profile", "data":self.agent.profiler.load()}))
+                    elif cmd.startswith("profile:build:"):
+                        answers = json.loads(cmd.split(":", 2)[2])
+                        profile = self.agent.profiler.build(answers)
+                        await websocket.send(json.dumps({"type":"profile", "data":profile}))
+                    elif cmd.startswith("mcp:tools:"):
+                        server_name = cmd.split(":", 2)[2]
+                        try:
+                            await websocket.send(json.dumps({"type":"mcp_tools", "data":self.agent.mcp.list_tools(server_name)}))
+                        except Exception as e:
+                            await websocket.send(json.dumps({"type":"notification", "content":f"MCP error: {e}"}))
+                    elif cmd == "mcp":
+                        await websocket.send(json.dumps({"type":"mcp", "data":self.agent.mcp.status()}))
                     elif cmd == "system_prompt":
                         await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
                     elif cmd.startswith("system_prompt:set:"):
@@ -2080,9 +2108,17 @@ class UltimateAgent:
         self.orchestra = ModelOrchestra(call_fn=_plain_llm_call, available_fn=_available_providers)
         self.vision = Vision(vision_chat_fn=_vision_call)
         self.voice = VoiceIO(transcribe_fn=_asr_call, tts_fn=_tts_call)
+        self.mcp = _mcp_client()
+        self.doctor = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
+        self.model_advisor = ModelAdvisor(provider_configs=PROVIDER_CONFIGS)
+        self.profiler = ProfileBuilder(save_skill_fn=SelfLearner.save_skill, memory_store=self.context.store)
         skills = SelfLearner.load_skills()
         skills_str = f"\nAvailable skills: {', '.join(skills)}" if skills else ""
-        self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{skills_str}"
+        persona_str = ""
+        addendum = self.profiler.system_addendum()
+        if addendum:
+            persona_str = f"\n{addendum}"
+        self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
     def _recent_sessions(self, k: int = 5) -> List[List[Dict]]:
         out = []
@@ -2223,6 +2259,32 @@ class UltimateAgent:
         @self.registry.register(description="Speak text out loud via TTS")
         def speak(text: str) -> str:
             return self.voice.speak(text)
+        @self.registry.register(description="List configured MCP servers and their connection status")
+        def mcp_servers() -> str:
+            return json.dumps(self.mcp.status(), indent=1)
+        @self.registry.register(description="List tools exposed by an MCP server (auto-connects)")
+        def mcp_tools(server: str) -> str:
+            try:
+                return json.dumps(self.mcp.list_tools(server), indent=1)
+            except Exception as e:
+                return f"MCP error: {e}"
+        @self.registry.register(description="Invoke a tool on an MCP server. arguments = JSON object string")
+        def mcp_invoke(server: str, tool: str, arguments: str = "{}") -> str:
+            try:
+                return self.mcp.call_tool(server, tool, json.loads(arguments or "{}"))
+            except Exception as e:
+                return f"MCP error: {e}"
+        @self.registry.register(description="Scan this device for missing dependencies and unconfigured providers; shows install fixes")
+        def system_doctor() -> str:
+            report = self.doctor.scan()
+            return self.doctor.summary(report) + "\n\n" + self.doctor.fix_script(report)
+        @self.registry.register(description="List which AI models this machine can run (local by hardware specs + cloud by configured keys)")
+        def advise_models() -> str:
+            return self.model_advisor.render()
+        @self.registry.register(description="Show the user's profile (persona, goals) built at first launch")
+        def show_profile() -> str:
+            profile = self.profiler.load()
+            return json.dumps(profile, indent=1) if profile else "No profile yet. Run /profile rebuild in the CLI."
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -2293,13 +2355,41 @@ class UltimateAgent:
                 self.messages.append({"role": "user", "content": f"[JUDGE] Goal NOT satisfied: {verdict.get('reason', 'insufficient evidence of completion')}. Continue working until truly complete."})
         HookManager.fire("on_stop")
         return "Max iterations reached."
+    def first_launch_setup(self):
+        """First-run onboarding: doctor scan, profile interview, model advisor."""
+        print("\n=== Welcome to Hermes! First-launch setup (press Enter to skip any question) ===\n")
+        try:
+            report = self.doctor.scan()
+            print(self.doctor.summary(report))
+            if report["missing"]:
+                print("\nRun /doctor anytime for install commands.\n")
+            answers = self.profiler.interview(lambda q: input(f"{q}\n> "))
+            if any(answers.values()):
+                profile = self.profiler.build(answers)
+                print(f"\nProfile built: {profile['persona_label']}")
+                if profile["skills_created"]:
+                    print(f"Pre-built skills for you: {', '.join(profile['skills_created'])}")
+                addendum = self.profiler.system_addendum()
+                if addendum:
+                    self.system_prompt += f"\n{addendum}"
+            else:
+                print("Skipped profiling — run /profile rebuild anytime.")
+            print("\n" + self.model_advisor.render())
+            print("\n=== Setup complete. Ask me anything. ===\n")
+        except (EOFError, KeyboardInterrupt):
+            print("\nSetup skipped.")
+        except Exception as exc:
+            print(f"Setup error (continuing anyway): {exc}")
+
     def chat(self):
         import uuid
         sid = self.session_id
+        if not self.profiler.exists() and sys.stdin.isatty():
+            self.first_launch_setup()
         print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
         print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
         print(f"Safety mode: {self.safety.mode}")
-        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, /dream, /distill, /subconscious, /blast, /experts, /see, /say, /listen, exit\n")
+        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, /dream, /distill, /subconscious, /blast, /experts, /see, /say, /listen, /doctor, /models, /profile, /mcp, exit\n")
         while True:
             try: u = input("You: ").strip()
             except (EOFError, KeyboardInterrupt): break
@@ -2355,6 +2445,37 @@ class UltimateAgent:
             if u.startswith("/search"):
                 query = u.split(" ", 1)[1] if " " in u else ""
                 print(json.dumps(self.indexer.search(query), indent=2)); continue
+            if u == "/doctor":
+                report = self.doctor.scan()
+                print(self.doctor.summary(report)); print(); print(self.doctor.fix_script(report)); continue
+            if u == "/models":
+                print(self.model_advisor.render()); continue
+            if u.startswith("/profile"):
+                if "rebuild" in u:
+                    answers = self.profiler.interview(lambda q: input(f"{q}\n> "))
+                    profile = self.profiler.build(answers)
+                    print(f"Profile rebuilt: {profile['persona_label']} (skills: {', '.join(profile['skills_created']) or 'none'})")
+                else:
+                    profile = self.profiler.load()
+                    print(json.dumps(profile, indent=1) if profile else "No profile. Use: /profile rebuild")
+                continue
+            if u.startswith("/mcp"):
+                parts = u.split(" ", 3)
+                sub = parts[1] if len(parts) > 1 else "list"
+                if sub == "list":
+                    print(json.dumps(self.mcp.status(), indent=1))
+                elif sub == "tools" and len(parts) > 2:
+                    try: print(json.dumps(self.mcp.list_tools(parts[2]), indent=1))
+                    except Exception as e: print(f"MCP error: {e}")
+                elif sub == "call" and len(parts) > 3:
+                    server_tool = parts[2].split("/", 1)
+                    if len(server_tool) == 2:
+                        try: print(self.mcp.call_tool(server_tool[0], server_tool[1], json.loads(parts[3])))
+                        except Exception as e: print(f"MCP error: {e}")
+                    else: print("Usage: /mcp call <server>/<tool> <json-args>")
+                else:
+                    print("Usage: /mcp list | /mcp tools <server> | /mcp call <server>/<tool> <json-args>")
+                continue
             if u.startswith("/blast"):
                 target = u.split(" ", 1)[1] if " " in u else ""
                 if target: print(json.dumps(self.world_model.blast_radius(target), indent=1))
