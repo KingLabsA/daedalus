@@ -1587,6 +1587,15 @@ def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str 
     if system_msg: compressed.insert(0, system_msg)
     return compressed
 
+def ws_token_ok(path_or_url: str, required: str) -> bool:
+    """WS auth gate: when a token is required, the connection URL must carry
+    token=<required> in its query string. No requirement -> always OK."""
+    if not required:
+        return True
+    query = str(path_or_url or "").split("?", 1)[-1] if "?" in str(path_or_url or "") else ""
+    pairs = [p.split("=", 1) for p in query.split("&") if "=" in p]
+    return any(k == "token" and v == required for k, v in pairs)
+
 _MCP_SINGLETON = None
 def _mcp_client():
     global _MCP_SINGLETON
@@ -1701,6 +1710,12 @@ class WebSocketServer:
     def __init__(self, agent):
         self.agent = agent; self.clients = set()
     async def handler(self, websocket, path=None):
+        required_token = os.getenv("HERMES_WS_TOKEN", "")
+        if required_token:
+            conn_path = path or getattr(websocket, "path", "") or getattr(getattr(websocket, "request", None), "path", "")
+            if not ws_token_ok(conn_path, required_token):
+                await websocket.close(code=4401, reason="unauthorized: missing/invalid token")
+                return
         try:
             origin = websocket.request_headers.get("Origin", "")
             cors_origin = os.getenv("CORS_ORIGIN", "tauri://localhost")
@@ -2455,6 +2470,140 @@ class UltimateAgent:
         except Exception as exc:
             print(f"Setup error (continuing anyway): {exc}")
 
+    COMMANDS_HELP = "/goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /search, /safety, /memory, /remember, /dream, /distill, /subconscious, /blast, /experts, /max, /route, /calibration, /see, /say, /listen, /doctor, /models, /profile, /mcp, /reset, exit"
+
+    def handle_command(self, u: str, ask_fn: Callable[[str], str] = input) -> Optional[str]:
+        """UI-agnostic slash-command dispatch. Returns output text for a handled
+        command ('' for silent success), or None when `u` is not a command and
+        should go to the LLM. Used by the plain CLI, the rich TUI, and tests."""
+        if u == "/reset":
+            self.messages = [{"role":"system","content":self.system_prompt}]
+            return "Reset."
+        if u.startswith("/provider"):
+            p = u.split(" ", 1)[1] if " " in u else ""
+            if p in PROVIDER_CONFIGS:
+                self.provider = p; self._provider_pinned = True
+                return f"Switched to {p} (pinned — auto-routing off for this session)"
+            return f"Available: {', '.join(PROVIDER_CONFIGS.keys())}"
+        if u.startswith("/kanban"):
+            parts = u.split()
+            if len(parts) >= 3 and parts[1] == "add": return self.kanban.add_task(parts[2]).id
+            if len(parts) >= 2 and parts[1] == "show": return json.dumps(self.kanban.get_board_state(), indent=2)
+            return None  # fall through to LLM (historic behavior)
+        if u.startswith("/goal"):
+            self.goal_manager = GoalManager(u.split(" ",1)[1] if " " in u else "")
+            return self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":f"Goal: {self.goal_manager.goal}. Work until COMPLETE."}])
+        if u.startswith("/multitask"):
+            rest = u.split(" ",1)[1] if " " in u else ""
+            tasks = [{"name":f"T-{i}","prompt":t.strip()} for i,t in enumerate(rest.split(",") if "," in rest else rest.split("|"))]
+            return json.dumps(ParallelExecutor.run(tasks, self), indent=2)
+        if u.startswith("/browser"):
+            p = u.split(" ",2)
+            if len(p) == 3 and p[1] == "goto": return str(asyncio.run(self.browser.goto(p[2])))
+            if len(p) >= 2 and p[1] == "screenshot": return str(asyncio.run(self.browser.screenshot()))
+            return ""
+        if u.startswith("/desktop open"):
+            return str(DesktopController.open_app(u.split("open ",1)[1]))
+        if u.startswith("/record"):
+            parts = u.split(" ",2)
+            if len(parts) >= 3:
+                SelfLearner.start_recording(parts[1], parts[2]); return f"Recording '{parts[1]}'"
+            return "Usage: /record <name> <desc>"
+        if u == "/stop_record": return SelfLearner.stop_recording(self.provider)
+        if u.startswith("/compose"):
+            rest = u.split(" ",2)
+            if len(rest) >= 3:
+                names = [s.strip() for s in rest[1].split(",")]
+                return SelfLearner.compose_workflow(names, rest[2], self.provider)
+            return None
+        if u.startswith("/checkpoint"):
+            parts = u.split()
+            if len(parts) >= 2 and parts[1] == "create":
+                return self.checkpoints.create_checkpoint(parts[2] if len(parts) > 2 else "")
+            if len(parts) >= 2 and parts[1] == "list":
+                return json.dumps(self.checkpoints.list_checkpoints(), indent=2)
+            if len(parts) >= 3 and parts[1] == "restore":
+                return self.checkpoints.restore_checkpoint(parts[2])
+            return None
+        if u.startswith("/index"): return self.indexer.index_project()
+        if u.startswith("/search"):
+            return json.dumps(self.indexer.search(u.split(" ", 1)[1] if " " in u else ""), indent=2)
+        if u.startswith("/max"):
+            prompt_text = u.split(" ", 1)[1] if " " in u else ""
+            return json.dumps(self.max_mode.run(prompt_text), indent=1) if prompt_text else "Usage: /max <prompt>"
+        if u.startswith("/route"):
+            prompt_text = u.split(" ", 1)[1] if " " in u else ""
+            return json.dumps(self.router.route(prompt_text), indent=1) if prompt_text else "Usage: /route <prompt>"
+        if u == "/calibration": return json.dumps(self.tracker.report(), indent=1)
+        if u == "/doctor":
+            report = self.doctor.scan()
+            return self.doctor.summary(report) + "\n\n" + self.doctor.fix_script(report)
+        if u == "/models": return self.model_advisor.render()
+        if u.startswith("/profile"):
+            if "rebuild" in u:
+                answers = self.profiler.interview(lambda q: ask_fn(f"{q}\n> "))
+                profile = self.profiler.build(answers)
+                return f"Profile rebuilt: {profile['persona_label']} (skills: {', '.join(profile['skills_created']) or 'none'})"
+            profile = self.profiler.load()
+            return json.dumps(profile, indent=1) if profile else "No profile. Use: /profile rebuild"
+        if u.startswith("/mcp"):
+            parts = u.split(" ", 3)
+            sub = parts[1] if len(parts) > 1 else "list"
+            if sub == "list": return json.dumps(self.mcp.status(), indent=1)
+            if sub == "tools" and len(parts) > 2:
+                try: return json.dumps(self.mcp.list_tools(parts[2]), indent=1)
+                except Exception as e: return f"MCP error: {e}"
+            if sub == "call" and len(parts) > 3:
+                server_tool = parts[2].split("/", 1)
+                if len(server_tool) == 2:
+                    try: return self.mcp.call_tool(server_tool[0], server_tool[1], json.loads(parts[3]))
+                    except Exception as e: return f"MCP error: {e}"
+                return "Usage: /mcp call <server>/<tool> <json-args>"
+            return "Usage: /mcp list | /mcp tools <server> | /mcp call <server>/<tool> <json-args>"
+        if u.startswith("/blast"):
+            target = u.split(" ", 1)[1] if " " in u else ""
+            return json.dumps(self.world_model.blast_radius(target), indent=1) if target else "Usage: /blast <file>"
+        if u.startswith("/experts"):
+            rest = u.split(" ", 1)[1] if " " in u else ""
+            if rest: return json.dumps(self.orchestra.committee(rest), indent=1)
+            return json.dumps({"available": _available_providers(), "profiles": self.orchestra.profiles}, indent=1)
+        if u.startswith("/see"):
+            parts = u.split(" ", 2)
+            if len(parts) >= 2:
+                return self.vision.analyze_image(parts[1], parts[2] if len(parts) > 2 else "Describe this image in detail.")
+            return "Usage: /see <image> [question]"
+        if u.startswith("/say"):
+            text = u.split(" ", 1)[1] if " " in u else ""
+            return self.voice.speak(text) if text else "Usage: /say <text>"
+        if u.startswith("/listen"):
+            parts = u.split()
+            secs = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5
+            heard = self.voice.listen(secs)
+            out = f"Heard: {heard}"
+            if heard and not heard.endswith(("not configured.", "failed.")) and "not " not in heard[:30]:
+                result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":heard}])
+                out += f"\n\n{result}"
+            return out
+        if u == "/dream": return json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)
+        if u == "/distill": return json.dumps(self.distiller.distill(), indent=1)
+        if u == "/subconscious": return json.dumps(self.subconscious.status(), indent=1)
+        if u.startswith("/remember"):
+            text = u.split(" ", 1)[1] if " " in u else ""
+            return self.context.remember(text) if text else "Usage: /remember <fact>"
+        if u.startswith("/memory"):
+            query = u.split(" ", 1)[1] if " " in u else ""
+            if query:
+                hits = self.context.recall(query)
+                return json.dumps([{"kind": h["kind"], "content": h["content"]} for h in hits], indent=1) if hits else "No matching memories."
+            return json.dumps(self.context.stats(), indent=1)
+        if u.startswith("/safety"):
+            parts = u.split()
+            if len(parts) >= 2:
+                self.safety.mode = parts[1]
+                return f"Safety mode: {self.safety.mode}"
+            return f"Current safety mode: {self.safety.mode}"
+        return None
+
     def chat(self):
         import uuid
         sid = self.session_id
@@ -2463,157 +2612,16 @@ class UltimateAgent:
         print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
         print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
         print(f"Safety mode: {self.safety.mode}")
-        print("Commands: /goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /safety, /memory, /remember, /dream, /distill, /subconscious, /blast, /experts, /see, /say, /listen, /doctor, /models, /profile, /mcp, exit\n")
+        print(f"Commands: {self.COMMANDS_HELP}\n")
         while True:
             try: u = input("You: ").strip()
             except (EOFError, KeyboardInterrupt): break
             if not u: continue
             if u == "exit": break
-            if u == "/reset":
-                self.messages = [{"role":"system","content":self.system_prompt}]; print("Reset."); continue
-            if u.startswith("/provider"):
-                p = u.split(" ", 1)[1] if " " in u else ""
-                if p in PROVIDER_CONFIGS: self.provider = p; self._provider_pinned = True; print(f"Switched to {p} (pinned — auto-routing off for this session)")
-                else: print(f"Available: {', '.join(PROVIDER_CONFIGS.keys())}")
+            handled = self.handle_command(u)
+            if handled is not None:
+                if handled: print(handled)
                 continue
-            if u.startswith("/kanban"):
-                parts = u.split()
-                if len(parts) >= 3 and parts[1]=="add": t=self.kanban.add_task(parts[2]); print(f"{t.id}"); continue
-                if len(parts)>=2 and parts[1]=="show": print(json.dumps(self.kanban.get_board_state(), indent=2)); continue
-            if u.startswith("/goal"):
-                self.goal_manager = GoalManager(u.split(" ",1)[1])
-                result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":f"Goal: {self.goal_manager.goal}. Work until COMPLETE."}])
-                print(f"\n{result}\n"); continue
-            if u.startswith("/multitask"):
-                rest = u.split(" ",1)[1] if " " in u else ""
-                tasks = [{"name":f"T-{i}","prompt":t.strip()} for i,t in enumerate(rest.split(",") if "," in rest else rest.split("|"))]
-                print(json.dumps(ParallelExecutor.run(tasks, self), indent=2)); continue
-            if u.startswith("/browser"):
-                p = u.split(" ",2)
-                if len(p)==3 and p[1]=="goto": print(asyncio.run(self.browser.goto(p[2])))
-                elif len(p)>=2 and p[1]=="screenshot": print(asyncio.run(self.browser.screenshot()))
-                continue
-            if u.startswith("/desktop open"):
-                print(DesktopController.open_app(u.split("open ",1)[1])); continue
-            if u.startswith("/record"):
-                parts = u.split(" ",2)
-                if len(parts)>=3: SelfLearner.start_recording(parts[1], parts[2]); print(f"Recording '{parts[1]}'"); continue
-                else: print("Usage: /record <name> <desc>"); continue
-            if u == "/stop_record": print(SelfLearner.stop_recording(self.provider)); continue
-            if u.startswith("/compose"):
-                rest = u.split(" ",2)
-                if len(rest)>=3:
-                    names = [s.strip() for s in rest[1].split(",")]
-                    print(SelfLearner.compose_workflow(names, rest[2], self.provider)); continue
-            if u.startswith("/checkpoint"):
-                parts = u.split()
-                if len(parts) >= 2 and parts[1] == "create":
-                    label = parts[2] if len(parts) > 2 else ""
-                    print(self.checkpoints.create_checkpoint(label)); continue
-                if len(parts) >= 2 and parts[1] == "list":
-                    print(json.dumps(self.checkpoints.list_checkpoints(), indent=2)); continue
-                if len(parts) >= 3 and parts[1] == "restore":
-                    print(self.checkpoints.restore_checkpoint(parts[2])); continue
-            if u.startswith("/index"):
-                print(self.indexer.index_project()); continue
-            if u.startswith("/search"):
-                query = u.split(" ", 1)[1] if " " in u else ""
-                print(json.dumps(self.indexer.search(query), indent=2)); continue
-            if u.startswith("/max"):
-                prompt_text = u.split(" ", 1)[1] if " " in u else ""
-                if prompt_text: print(json.dumps(self.max_mode.run(prompt_text), indent=1))
-                else: print("Usage: /max <prompt>")
-                continue
-            if u.startswith("/route"):
-                prompt_text = u.split(" ", 1)[1] if " " in u else ""
-                if prompt_text: print(json.dumps(self.router.route(prompt_text), indent=1))
-                else: print("Usage: /route <prompt>")
-                continue
-            if u == "/calibration":
-                print(json.dumps(self.tracker.report(), indent=1)); continue
-            if u == "/doctor":
-                report = self.doctor.scan()
-                print(self.doctor.summary(report)); print(); print(self.doctor.fix_script(report)); continue
-            if u == "/models":
-                print(self.model_advisor.render()); continue
-            if u.startswith("/profile"):
-                if "rebuild" in u:
-                    answers = self.profiler.interview(lambda q: input(f"{q}\n> "))
-                    profile = self.profiler.build(answers)
-                    print(f"Profile rebuilt: {profile['persona_label']} (skills: {', '.join(profile['skills_created']) or 'none'})")
-                else:
-                    profile = self.profiler.load()
-                    print(json.dumps(profile, indent=1) if profile else "No profile. Use: /profile rebuild")
-                continue
-            if u.startswith("/mcp"):
-                parts = u.split(" ", 3)
-                sub = parts[1] if len(parts) > 1 else "list"
-                if sub == "list":
-                    print(json.dumps(self.mcp.status(), indent=1))
-                elif sub == "tools" and len(parts) > 2:
-                    try: print(json.dumps(self.mcp.list_tools(parts[2]), indent=1))
-                    except Exception as e: print(f"MCP error: {e}")
-                elif sub == "call" and len(parts) > 3:
-                    server_tool = parts[2].split("/", 1)
-                    if len(server_tool) == 2:
-                        try: print(self.mcp.call_tool(server_tool[0], server_tool[1], json.loads(parts[3])))
-                        except Exception as e: print(f"MCP error: {e}")
-                    else: print("Usage: /mcp call <server>/<tool> <json-args>")
-                else:
-                    print("Usage: /mcp list | /mcp tools <server> | /mcp call <server>/<tool> <json-args>")
-                continue
-            if u.startswith("/blast"):
-                target = u.split(" ", 1)[1] if " " in u else ""
-                if target: print(json.dumps(self.world_model.blast_radius(target), indent=1))
-                else: print("Usage: /blast <file>")
-                continue
-            if u.startswith("/experts"):
-                rest = u.split(" ", 1)[1] if " " in u else ""
-                if rest: print(json.dumps(self.orchestra.committee(rest), indent=1))
-                else: print(json.dumps({"available": _available_providers(), "profiles": self.orchestra.profiles}, indent=1))
-                continue
-            if u.startswith("/see"):
-                parts = u.split(" ", 2)
-                if len(parts) >= 2: print(self.vision.analyze_image(parts[1], parts[2] if len(parts) > 2 else "Describe this image in detail."))
-                else: print("Usage: /see <image> [question]")
-                continue
-            if u.startswith("/say"):
-                text = u.split(" ", 1)[1] if " " in u else ""
-                print(self.voice.speak(text) if text else "Usage: /say <text>"); continue
-            if u.startswith("/listen"):
-                parts = u.split()
-                secs = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 5
-                heard = self.voice.listen(secs)
-                print(f"Heard: {heard}")
-                if heard and not heard.endswith(("not configured.", "failed.")) and "not " not in heard[:30]:
-                    result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":heard}])
-                    print(f"\n{result}\n")
-                continue
-            if u == "/dream":
-                print(json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)); continue
-            if u == "/distill":
-                print(json.dumps(self.distiller.distill(), indent=1)); continue
-            if u == "/subconscious":
-                print(json.dumps(self.subconscious.status(), indent=1)); continue
-            if u.startswith("/remember"):
-                text = u.split(" ", 1)[1] if " " in u else ""
-                if text: print(self.context.remember(text))
-                else: print("Usage: /remember <fact>")
-                continue
-            if u.startswith("/memory"):
-                query = u.split(" ", 1)[1] if " " in u else ""
-                if query:
-                    hits = self.context.recall(query)
-                    print(json.dumps([{"kind": h["kind"], "content": h["content"]} for h in hits], indent=1) if hits else "No matching memories.")
-                else:
-                    print(json.dumps(self.context.stats(), indent=1))
-                continue
-            if u.startswith("/safety"):
-                parts = u.split()
-                if len(parts) >= 2:
-                    self.safety.mode = parts[1]
-                    print(f"Safety mode: {self.safety.mode}"); continue
-                print(f"Current safety mode: {self.safety.mode}"); continue
             result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":u}])
             print(f"\n{result}\n")
 

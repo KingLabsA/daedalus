@@ -2,7 +2,8 @@ import React, { createContext, useContext, useEffect, useRef, useCallback, useSt
 import { useStore } from "../store/session";
 import { Message, KanbanState } from "../types";
 
-const WS_URL = "ws://127.0.0.1:8765";
+const WS_TOKEN = (window as any).HERMES_TOKEN || "";
+const WS_URL = `ws://127.0.0.1:8765${WS_TOKEN ? `/?token=${WS_TOKEN}` : ""}`;
 
 export interface WsContextValue {
   send: (text: string) => void;

@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""hermes — product launcher for Hermes Ultimate.
+
+  hermes            rich terminal UI (falls back to plain CLI without `rich`)
+  hermes web        web IDE: serves the built frontend + agent WS server, one process
+  hermes ws         headless agent WebSocket server
+  hermes doctor     scan this device for missing dependencies
+  hermes models     what models can this machine run
+  hermes version    print version
+"""
+import argparse
+import json
+import os
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import webbrowser
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+VERSION = "1.1.0"
+
+
+# ── helpers (unit-tested) ─────────────────────────────────────
+
+def inject_token(html: str, token: str) -> str:
+    """Idempotently inject the WS auth token into served index.html."""
+    marker = "window.HERMES_TOKEN"
+    if marker in html:
+        return html
+    script = f"<script>window.HERMES_TOKEN={json.dumps(token)}</script>"
+    if "<head>" in html:
+        return html.replace("<head>", "<head>" + script, 1)
+    return script + html
+
+
+def find_dist(root: Path = ROOT) -> Path:
+    return root / "desktop" / "dist"
+
+
+def dist_ready(root: Path = ROOT) -> bool:
+    return (find_dist(root) / "index.html").is_file()
+
+
+def build_frontend(root: Path = ROOT) -> bool:
+    if not shutil.which("npm"):
+        return False
+    desktop = root / "desktop"
+    try:
+        if not (desktop / "node_modules").exists():
+            subprocess.run(["npm", "install"], cwd=desktop, check=True, timeout=600)
+        subprocess.run(["npm", "run", "build"], cwd=desktop, check=True, timeout=600)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return False
+    return dist_ready(root)
+
+
+# ── web IDE ───────────────────────────────────────────────────
+
+class _SpaHandler(SimpleHTTPRequestHandler):
+    """Static file server with SPA fallback and token-injected index.html."""
+    token = ""
+
+    def _serve_index(self):
+        index = Path(self.directory) / "index.html"
+        body = inject_token(index.read_text(), self.token).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path in ("/", "/index.html"):
+            return self._serve_index()
+        candidate = Path(self.directory) / path.lstrip("/")
+        if candidate.is_file():
+            return super().do_GET()
+        return self._serve_index()  # SPA fallback
+
+    def log_message(self, fmt, *args):
+        pass  # keep the console clean
+
+
+def cmd_web(port: int, no_browser: bool = False):
+    if not dist_ready():
+        print("Frontend not built — building now (one-time, needs npm)...")
+        if not build_frontend():
+            sys.exit("Could not build the frontend. Install node/npm (brew install node), "
+                     "then run: cd desktop && npm install && npm run build")
+    token = secrets.token_hex(16)
+    os.environ["HERMES_WS_TOKEN"] = token
+
+    sys.path.insert(0, str(ROOT))
+    import asyncio
+    from agent_ultimate import UltimateAgent, run_ws_server
+    agent = UltimateAgent()
+    ws_thread = threading.Thread(target=lambda: asyncio.run(run_ws_server(agent)), daemon=True, name="hermes-ws")
+    ws_thread.start()
+
+    handler = partial(_SpaHandler, directory=str(find_dist()))
+    _SpaHandler.token = token
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    url = f"http://127.0.0.1:{port}"
+    print(f"Hermes Web IDE  ->  {url}   (agent ws://127.0.0.1:8765, token-protected)")
+    print("Ctrl-C to stop.")
+    if not no_browser:
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down.")
+        agent.subconscious.stop()
+
+
+# ── rich TUI ──────────────────────────────────────────────────
+
+def cmd_tui():
+    sys.path.insert(0, str(ROOT))
+    from agent_ultimate import UltimateAgent, PROVIDER_CONFIGS, MODEL_NAME
+    try:
+        from rich.console import Console
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+    except ImportError:
+        print("(tip: pip install rich for the full TUI)")
+        UltimateAgent().chat()
+        return
+
+    console = Console()
+    agent = UltimateAgent()
+    if not agent.profiler.exists() and sys.stdin.isatty():
+        agent.first_launch_setup()
+
+    stats = agent.context.stats()
+    profile = agent.profiler.load() or {}
+    console.print(Panel.fit(
+        f"[bold magenta]HERMES[/] [dim]v{VERSION} — Deep Mind[/]\n"
+        f"provider [cyan]{agent.provider}[/] ({MODEL_NAME}) · auto-routing [green]on[/]\n"
+        f"[dim]{stats['memories']} memories · {stats['failures']} antibodies · "
+        f"{len(agent.registry.list_tools())} tools · persona: {profile.get('persona_label', '—')}[/]\n"
+        f"[dim]/help for commands · exit to quit[/]",
+        border_style="magenta",
+    ))
+
+    while True:
+        try:
+            u = console.input("[bold cyan]you ▸ [/]").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not u:
+            continue
+        if u in ("exit", "quit"):
+            break
+        if u == "/help":
+            console.print(Panel(agent.COMMANDS_HELP, title="commands", border_style="dim"))
+            continue
+        try:
+            if u.startswith("/"):
+                with console.status("[dim]working…[/]"):
+                    handled = agent.handle_command(u, ask_fn=lambda q: console.input(f"[yellow]{q}[/]\n> "))
+                if handled is not None:
+                    if handled.strip().startswith(("{", "[")):
+                        console.print_json(handled)
+                    elif handled:
+                        console.print(handled)
+                    continue
+            with console.status(f"[dim]thinking ({agent.provider})…[/]"):
+                result = agent.run_loop([
+                    {"role": "system", "content": agent.system_prompt},
+                    {"role": "user", "content": u},
+                ])
+            routed = next((l for l in reversed(agent.logs) if l.get("type") == "auto_route"), None)
+            subtitle = f"routed → {routed['provider']} (tier {routed['tier']})" if routed else agent.provider
+            console.print(Panel(Markdown(result or ""), title="hermes", subtitle=f"[dim]{subtitle}[/]",
+                                border_style="blue", title_align="left", subtitle_align="right"))
+        except Exception as exc:
+            console.print(f"[red]error:[/] {exc}")
+    agent.subconscious.stop()
+    console.print("[dim]bye.[/]")
+
+
+# ── one-shot utilities ────────────────────────────────────────
+
+def cmd_ws():
+    sys.path.insert(0, str(ROOT))
+    import asyncio
+    from agent_ultimate import UltimateAgent, run_ws_server, WS_HOST, WS_PORT
+    print(f"Hermes agent server on ws://{WS_HOST}:{WS_PORT}")
+    asyncio.run(run_ws_server(UltimateAgent()))
+
+
+def cmd_doctor():
+    sys.path.insert(0, str(ROOT))
+    from agent_ultimate import PROVIDER_CONFIGS
+    from core.platform import DependencyScanner
+    scanner = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
+    report = scanner.scan()
+    print(scanner.summary(report))
+    print()
+    print(scanner.fix_script(report))
+
+
+def cmd_models():
+    sys.path.insert(0, str(ROOT))
+    from agent_ultimate import PROVIDER_CONFIGS
+    from core.platform import ModelAdvisor
+    print(ModelAdvisor(provider_configs=PROVIDER_CONFIGS).render())
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="hermes", description="Hermes Ultimate — Deep Mind coding assistant")
+    sub = parser.add_subparsers(dest="cmd")
+    sub.add_parser("tui", help="rich terminal UI (default)")
+    web = sub.add_parser("web", help="web IDE (serves frontend + agent)")
+    web.add_argument("--port", type=int, default=8899)
+    web.add_argument("--no-browser", action="store_true")
+    sub.add_parser("ws", help="headless agent WebSocket server")
+    sub.add_parser("doctor", help="scan device for missing dependencies")
+    sub.add_parser("models", help="models this machine can run")
+    sub.add_parser("version", help="print version")
+    args = parser.parse_args(argv)
+
+    if args.cmd == "web":
+        cmd_web(args.port, args.no_browser)
+    elif args.cmd == "ws":
+        cmd_ws()
+    elif args.cmd == "doctor":
+        cmd_doctor()
+    elif args.cmd == "models":
+        cmd_models()
+    elif args.cmd == "version":
+        print(f"hermes-ultimate {VERSION}")
+    else:
+        cmd_tui()
+
+
+if __name__ == "__main__":
+    main()
