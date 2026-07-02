@@ -14,6 +14,7 @@ from core.intel import CodeIntel, SemanticIndex, CausalWorldModel, WorldModelSen
 from core.senses import ModelOrchestra, Vision, VoiceIO
 from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
 from core.platform import McpClient, DependencyScanner, ProfileBuilder, ModelAdvisor
+from core.epistemic import CalibrationTracker, CostAwareRouter, MaxMode
 
 # Fable 5 leads the reasoning/creative expert profiles when its key is present
 for _profile_name in ("reasoning", "creative", "long_context"):
@@ -1887,6 +1888,10 @@ class WebSocketServer:
                             await websocket.send(json.dumps({"type":"notification", "content":f"MCP error: {e}"}))
                     elif cmd == "mcp":
                         await websocket.send(json.dumps({"type":"mcp", "data":self.agent.mcp.status()}))
+                    elif cmd == "calibration":
+                        await websocket.send(json.dumps({"type":"calibration", "data":self.agent.tracker.report()}))
+                    elif cmd.startswith("route:"):
+                        await websocket.send(json.dumps({"type":"route", "data":self.agent.router.route(cmd.split(":", 1)[1])}))
                     elif cmd == "system_prompt":
                         await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
                     elif cmd.startswith("system_prompt:set:"):
@@ -2112,6 +2117,20 @@ class UltimateAgent:
         self.doctor = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
         self.model_advisor = ModelAdvisor(provider_configs=PROVIDER_CONFIGS)
         self.profiler = ProfileBuilder(save_skill_fn=SelfLearner.save_skill, memory_store=self.context.store)
+        self.tracker = CalibrationTracker(DB_FILE)
+        self.router = CostAwareRouter(available_fn=_available_providers, tracker=self.tracker)
+        def _candidates(prompt: str, n: int) -> Dict[str, str]:
+            members = self.orchestra._committee_members(self.orchestra.classify(prompt), n)
+            out = {}
+            with ThreadPoolExecutor(max_workers=max(1, len(members))) as pool:
+                futures = {pool.submit(_plain_llm_call, m, prompt): m for m in members}
+                for future in as_completed(futures):
+                    member = futures[future]
+                    try: out[member] = future.result()
+                    except Exception as e: out[member] = f"(failed: {e})"
+            return out
+        self.max_mode = MaxMode(candidates_fn=_candidates, judge_fn=_ctx_summarize, tracker=self.tracker)
+        HookManager.register("post_tool", self._record_tool_outcomes)
         skills = SelfLearner.load_skills()
         skills_str = f"\nAvailable skills: {', '.join(skills)}" if skills else ""
         persona_str = ""
@@ -2120,6 +2139,14 @@ class UltimateAgent:
             persona_str = f"\n{addendum}"
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
+    def _record_tool_outcomes(self, results: Optional[List[Dict]] = None, **kwargs):
+        try:
+            for res in results or []:
+                output = str(res.get("result") or "")
+                success = not ("Error" in output or "ToolError" in output)
+                self.tracker.record("tool_run", 0.8, success)
+        except Exception:
+            pass
     def _recent_sessions(self, k: int = 5) -> List[List[Dict]]:
         out = []
         for sid in self.store.list_sessions()[:k]:
@@ -2285,6 +2312,15 @@ class UltimateAgent:
         def show_profile() -> str:
             profile = self.profiler.load()
             return json.dumps(profile, indent=1) if profile else "No profile yet. Run /profile rebuild in the CLI."
+        @self.registry.register(description="Max Mode: generate N answers from different expert models, judge them, return the best")
+        def max_mode(prompt: str, n: str = "3") -> str:
+            return json.dumps(self.max_mode.run(prompt, int(n)), indent=1)
+        @self.registry.register(description="Explain how a task would be routed (difficulty, chosen provider, cost tier)")
+        def route_task(prompt: str) -> str:
+            return json.dumps(self.router.route(prompt), indent=1)
+        @self.registry.register(description="Show the calibration report: predicted confidence vs actual outcomes")
+        def calibration_report() -> str:
+            return json.dumps(self.tracker.report(), indent=1)
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -2346,6 +2382,10 @@ class UltimateAgent:
                 self.messages.append({"role": "tool", "tool_call_id": res["id"], "content": res["result"]})
             if self.goal_manager and self.goal_manager.is_complete(response.content or ""):
                 verdict = self.judge.verdict(self.goal_manager.goal, self.messages)
+                try:
+                    self.tracker.record("goal_judge", float(verdict.get("confidence", 0.5)), bool(verdict.get("complete", True)))
+                except Exception:
+                    pass
                 if verdict.get("complete", True):
                     HookManager.fire("on_stop")
                     suffix = f" (judge: {verdict['reason'][:120]})" if verdict.get("reason") else ""
@@ -2445,6 +2485,18 @@ class UltimateAgent:
             if u.startswith("/search"):
                 query = u.split(" ", 1)[1] if " " in u else ""
                 print(json.dumps(self.indexer.search(query), indent=2)); continue
+            if u.startswith("/max"):
+                prompt_text = u.split(" ", 1)[1] if " " in u else ""
+                if prompt_text: print(json.dumps(self.max_mode.run(prompt_text), indent=1))
+                else: print("Usage: /max <prompt>")
+                continue
+            if u.startswith("/route"):
+                prompt_text = u.split(" ", 1)[1] if " " in u else ""
+                if prompt_text: print(json.dumps(self.router.route(prompt_text), indent=1))
+                else: print("Usage: /route <prompt>")
+                continue
+            if u == "/calibration":
+                print(json.dumps(self.tracker.report(), indent=1)); continue
             if u == "/doctor":
                 report = self.doctor.scan()
                 print(self.doctor.summary(report)); print(); print(self.doctor.fix_script(report)); continue

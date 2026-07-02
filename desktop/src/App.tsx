@@ -9,10 +9,12 @@ import GitPanel from "./components/Git/GitPanel";
 import LspPanel from "./components/Lsp/LspPanel";
 import SessionPanel from "./components/Sessions/SessionPanel";
 import FileExplorer from "./components/Files/FileExplorer";
+import MindPanel from "./components/Mind/MindPanel";
+import OnboardingWizard from "./components/Mind/OnboardingWizard";
 import { WsProvider, useWs } from "./hooks/useWebSocket";
 import { useStore } from "./store/session";
 
-type Tab = "chat" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
+type Tab = "chat" | "mind" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
 
 function ConnectionBar() {
   const { connected, connecting } = useWs();
@@ -181,6 +183,7 @@ function AppContent() {
 
   const tabs: { id: Tab; label: string; short: string }[] = [
     { id: "chat", label: "Chat", short: "CH" },
+    { id: "mind", label: "Mind", short: "MI" },
     { id: "kanban", label: "Kanban", short: "KB" },
     { id: "agents", label: "Dashboard", short: "DB" },
     { id: "composer", label: "Composer", short: "CP" },
@@ -207,6 +210,7 @@ function AppContent() {
         ::-webkit-scrollbar-thumb { background: #3a3a5c; border-radius: 3px; }
       `}</style>
       <StartupOverlay />
+      <OnboardingWizard />
       <ConnectionBar />
       <div style={styles.body}>
         <nav style={{ ...styles.sidebar, background: cssVars.sidebarBg, borderRight: `1px solid ${cssVars.border}` }}>
@@ -234,6 +238,7 @@ function AppContent() {
         </nav>
         <main style={styles.main}>
           {activeTab === "chat" && <ChatView />}
+          {activeTab === "mind" && <MindPanel />}
           {activeTab === "kanban" && <KanbanBoard />}
           {activeTab === "agents" && <AgentDashboard />}
           {activeTab === "composer" && <Composer />}
