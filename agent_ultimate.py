@@ -60,6 +60,12 @@ PLUGINS_DIR = Path(os.getenv("PLUGINS_DIR", "plugins"))
 PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
 PLUGIN_REGISTRY_URL = os.getenv("PLUGIN_REGISTRY_URL", "https://hermes-plugins.fake")
 SAFETY_MODE = os.getenv("SAFETY_MODE", "suggest")  # suggest, plan, auto
+# Local models get a pruned toolset — 80+ schemas bury small models and blow up context
+CORE_TOOLS = [
+    "read_file", "write_file", "append_file", "edit_file_line", "run_command",
+    "grep", "list_files", "git_status", "git_diff_preview", "git_commit",
+    "semantic_search", "search_index", "remember", "recall_memory", "task_board", "execute_python",
+]
 
 # Streaming queue for live command output
 _stream_queue: List[Dict] = []
@@ -1190,8 +1196,9 @@ PROVIDER_CONFIGS = {
     "anthropic":  {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-3-5-sonnet-20241022", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-3-5-sonnet-20241022"]},
     "fable":      {"env": "ANTHROPIC_API_KEY",    "lib": "anthropic",  "client": "Anthropic",  "default_model": "claude-fable-5", "description": "Claude Fable 5 — Anthropic's Mythos-class frontier model", "models": ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"]},
     "openrouter": {"env": "OPENROUTER_API_KEY",   "lib": "openai",     "base": "https://openrouter.ai/api/v1", "default_model": "openai/gpt-4o-mini"},
-    "ollama":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "qwen2.5-coder:7b"},
-    "hermes":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "hermes3:8b", "description": "Nous Hermes 3 via Ollama — uncensored, tool-use, reasoning", "models": ["hermes3:3b", "hermes3:8b", "hermes3:70b", "hermes3:405b"]},
+    "ollama":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b"), "local": True, "ollama": True},
+    "hermes":     {"env": "",                     "lib": "openai",     "base": os.getenv("OLLAMA_HOST","http://localhost:11434")+"/v1", "default_model": "hermes3:8b", "description": "Nous Hermes 3 via Ollama — uncensored, tool-use, reasoning", "models": ["hermes3:3b", "hermes3:8b", "hermes3:70b", "hermes3:405b"], "local": True, "ollama": True},
+    "freellmapi": {"env": "FREELLMAPI_API_KEY",   "lib": "openai",     "base": os.getenv("FREELLMAPI_HOST","http://localhost:3002")+"/v1", "default_model": os.getenv("FREELLMAPI_MODEL", "auto"), "description": "Local FreeLLMAPI gateway (67 free models) — launch it first", "local": True},
     "google":     {"env": "GOOGLE_API_KEY",       "lib": "google.generativeai", "default_model": "gemini-1.5-pro"},
     "groq":       {"env": "GROQ_API_KEY",         "lib": "openai",     "base": "https://api.groq.com/openai/v1", "default_model": "llama3-70b-8192"},
     "xai":        {"env": "XAI_API_KEY",          "lib": "openai",     "base": "https://api.x.ai/v1", "default_model": "grok-2-1212"},
@@ -1224,6 +1231,21 @@ def _get_provider_client(provider: str = None):
     if base: return ClientClass(api_key=api_key, base_url=base)
     return ClientClass(api_key=api_key) if api_key else ClientClass()
 
+def _model_for(provider: str, cfg: dict) -> str:
+    """MODEL_NAME env only overrides the user's selected provider; routed
+    providers always use their own default (a global override breaks routing)."""
+    if provider == LLM_PROVIDER and os.getenv("MODEL_NAME"):
+        return os.getenv("MODEL_NAME")
+    return cfg.get("default_model", "gpt-4o-mini")
+
+def _openai_call_kwargs(cfg: dict) -> dict:
+    """Timeout for every OpenAI-compatible call; num_ctx cap for Ollama-backed
+    models so an 8B model doesn't balloon to a 131k-token 22 GB allocation."""
+    kwargs = {"timeout": float(os.getenv("HERMES_LLM_TIMEOUT", "120"))}
+    if cfg.get("ollama"):
+        kwargs["extra_body"] = {"options": {"num_ctx": int(os.getenv("HERMES_LOCAL_NUM_CTX", "8192"))}}
+    return kwargs
+
 class ProviderRouter:
     @staticmethod
     def call(messages: List[Dict], tools_schemas: List[Dict], provider: str = None):
@@ -1231,7 +1253,7 @@ class ProviderRouter:
         provider = provider or LLM_PROVIDER
         cfg = PROVIDER_CONFIGS.get(provider)
         if not cfg: raise ValueError(f"Unsupported provider: {provider}")
-        model = os.getenv("MODEL_NAME", cfg.get("default_model", "gpt-4o-mini"))
+        model = _model_for(provider, cfg)
         api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
         base = cfg.get("base")
 
@@ -1245,7 +1267,7 @@ class ProviderRouter:
                 elif m["role"] == "user": om.append({"role": "user", "content": m.get("content","")})
                 elif m["role"] == "assistant": om.append({"role": "assistant", "content": m.get("content","")})
                 elif m["role"] == "tool": om.append({"role": "tool", "tool_call_id": m.get("tool_call_id",""), "content": m["content"]})
-            resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None)
+            resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None, **_openai_call_kwargs(cfg))
             _track_cost(provider, resp.usage.prompt_tokens, resp.usage.completion_tokens)
             return resp.choices[0].message
 
@@ -1303,7 +1325,7 @@ class ProviderRouter:
                 if base and not api_key: api_key = "ollama"
                 client = openai.OpenAI(api_key=api_key, base_url=base) if api_key or base else openai.OpenAI()
                 om = [{"role": m["role"], "content": m.get("content","")} for m in messages if m["role"] in ("system","user","assistant")]
-                resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None)
+                resp = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None, **_openai_call_kwargs(cfg))
                 _track_cost(provider, resp.usage.prompt_tokens, resp.usage.completion_tokens)
                 return resp.choices[0].message
             except Exception as e:
@@ -1315,7 +1337,7 @@ class ProviderRouter:
         provider = provider or LLM_PROVIDER
         cfg = PROVIDER_CONFIGS.get(provider)
         if not cfg: raise ValueError(f"Unsupported provider: {provider}")
-        model = os.getenv("MODEL_NAME", cfg.get("default_model", "gpt-4o-mini"))
+        model = _model_for(provider, cfg)
         api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
         base = cfg.get("base")
 
@@ -1329,7 +1351,7 @@ class ProviderRouter:
                 elif m["role"] == "user": om.append({"role": "user", "content": m.get("content","")})
                 elif m["role"] == "assistant": om.append({"role": "assistant", "content": m.get("content","")})
                 elif m["role"] == "tool": om.append({"role": "tool", "tool_call_id": m.get("tool_call_id",""), "content": m["content"]})
-            stream = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None, stream=True)
+            stream = client.chat.completions.create(model=model, messages=om, tools=tools_schemas if tools_schemas else None, tool_choice="auto" if tools_schemas else None, stream=True, **_openai_call_kwargs(cfg))
             tool_calls = []
             content_parts = []
             usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -1604,12 +1626,80 @@ def _mcp_client():
     return _MCP_SINGLETON
 
 def _available_providers() -> list:
+    """Providers whose key is set (or that need none). Presence only — see
+    _live_providers for validated liveness."""
     out = []
     for name, cfg in PROVIDER_CONFIGS.items():
         env_key = cfg.get("env", "")
         if not env_key or os.getenv(env_key):
             out.append(name)
     return out
+
+_LIVE_CACHE: Dict[str, Tuple[float, bool]] = {}
+_LIVE_TTL = float(os.getenv("HERMES_PROVIDER_PROBE_TTL", "300"))
+
+def _probe_provider(name: str) -> bool:
+    """Actually verify a provider answers (key VALIDITY, not just presence).
+    Uses free endpoints only (GET /models). Local providers probed without a key."""
+    import requests as _rq
+    cfg = PROVIDER_CONFIGS.get(name)
+    if not cfg:
+        return False
+    env_key = cfg.get("env", "")
+    key = os.getenv(env_key, "") if env_key else ""
+    if cfg.get("local"):
+        if env_key and not key:
+            return False  # gateway (e.g. freellmapi) requires a key that isn't configured
+        try:
+            base = cfg.get("base", "").rstrip("/")
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            return _rq.get(f"{base}/models", headers=headers, timeout=2).status_code < 500
+        except Exception:
+            return False
+    if env_key and not key:
+        return False
+    if cfg.get("lib") == "anthropic":
+        try:
+            r = _rq.get("https://api.anthropic.com/v1/models",
+                        headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, timeout=4)
+            return r.status_code == 200
+        except Exception:
+            return False
+    if cfg.get("lib") == "openai" and cfg.get("base"):
+        try:
+            r = _rq.get(f"{cfg['base'].rstrip('/')}/models", headers={"Authorization": f"Bearer {key}"}, timeout=4)
+            return r.status_code == 200
+        except Exception:
+            return False
+    if cfg.get("lib") == "openai" and not cfg.get("base"):  # api.openai.com
+        try:
+            r = _rq.get("https://api.openai.com/v1/models", headers={"Authorization": f"Bearer {key}"}, timeout=4)
+            return r.status_code == 200
+        except Exception:
+            return False
+    return bool(key)  # google/cohere etc: fall back to key presence
+
+def _provider_alive(name: str) -> bool:
+    now = time.time()
+    cached = _LIVE_CACHE.get(name)
+    if cached and now - cached[0] < _LIVE_TTL:
+        return cached[1]
+    alive = _probe_provider(name)
+    _LIVE_CACHE[name] = (now, alive)
+    return alive
+
+def _live_providers() -> list:
+    """Validated-live providers: local endpoints that answer + cloud keys that work.
+    Probes run concurrently and are cached for HERMES_PROVIDER_PROBE_TTL seconds."""
+    candidates = [n for n, cfg in PROVIDER_CONFIGS.items()
+                  if cfg.get("local") or not cfg.get("env") or os.getenv(cfg.get("env", ""))]
+    now = time.time()
+    stale = [n for n in candidates if n not in _LIVE_CACHE or now - _LIVE_CACHE[n][0] >= _LIVE_TTL]
+    if stale:
+        with ThreadPoolExecutor(max_workers=min(8, len(stale))) as pool:
+            for name, alive in zip(stale, pool.map(_probe_provider, stale)):
+                _LIVE_CACHE[name] = (now, alive)
+    return [n for n in candidates if _LIVE_CACHE.get(n, (0, False))[1]]
 
 def _plain_llm_call(provider: str, prompt: str) -> str:
     resp = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider)
@@ -2111,6 +2201,7 @@ class UltimateAgent:
         self.browser = AdvancedBrowser(); self.desktop = DesktopController()
         self.provider = LLM_PROVIDER
         self._provider_pinned = False
+        self.on_token: Optional[Callable[[str], None]] = None  # set by TUIs for live streaming
         self.logs: List[Dict] = []
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
@@ -2130,7 +2221,7 @@ class UltimateAgent:
         self.world_model = CausalWorldModel()
         self.wm_sentinel = WorldModelSentinel(self.world_model)
         self.wm_sentinel.attach(HookManager)
-        self.orchestra = ModelOrchestra(call_fn=_plain_llm_call, available_fn=_available_providers)
+        self.orchestra = ModelOrchestra(call_fn=_plain_llm_call, available_fn=_live_providers)
         self.vision = Vision(vision_chat_fn=_vision_call)
         self.voice = VoiceIO(transcribe_fn=_asr_call, tts_fn=_tts_call)
         self.mcp = _mcp_client()
@@ -2138,7 +2229,7 @@ class UltimateAgent:
         self.model_advisor = ModelAdvisor(provider_configs=PROVIDER_CONFIGS)
         self.profiler = ProfileBuilder(save_skill_fn=SelfLearner.save_skill, memory_store=self.context.store)
         self.tracker = CalibrationTracker(DB_FILE)
-        self.router = CostAwareRouter(available_fn=_available_providers, tracker=self.tracker)
+        self.router = CostAwareRouter(available_fn=_live_providers, tracker=self.tracker)
         def _candidates(prompt: str, n: int) -> Dict[str, str]:
             members = self.orchestra._committee_members(self.orchestra.classify(prompt), n)
             out = {}
@@ -2159,6 +2250,53 @@ class UltimateAgent:
             persona_str = f"\n{addendum}"
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
+    def _call_llm(self, messages: List[Dict], schemas: List[Dict], provider: str):
+        """One retry with backoff; streams through self.on_token when set."""
+        for attempt in (1, 2):
+            try:
+                if self.on_token:
+                    return self._call_llm_stream(messages, schemas, provider)
+                return ProviderRouter.call(messages, schemas, provider)
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(1.5)
+
+    def _call_llm_stream(self, messages: List[Dict], schemas: List[Dict], provider: str):
+        parts: List[str] = []
+        final = None
+        for chunk, result, usage in ProviderRouter.call_stream(messages, schemas, provider):
+            if chunk:
+                parts.append(chunk)
+                try:
+                    self.on_token(chunk)
+                except Exception:
+                    pass
+            if result:
+                final = result
+        if final is None:
+            final = type("Response", (), {"content": "".join(parts), "tool_calls": []})()
+        elif not getattr(final, "content", None) and parts:
+            try:
+                final.content = "".join(parts)
+            except Exception:
+                pass
+        return final
+
+    def _next_fallback(self, failed: str) -> Optional[str]:
+        """Failover order after a provider dies mid-run: the user's own provider
+        first, then any other validated-live provider not yet tried this run."""
+        self._failed_providers.add(failed)
+        if self.provider not in self._failed_providers:
+            return self.provider
+        try:
+            for p in _live_providers():
+                if p not in self._failed_providers:
+                    return p
+        except Exception:
+            pass
+        return None
+
     def _route_provider(self, user_text: str) -> Tuple[str, Optional[int]]:
         """Cost-aware auto-routing for a run: returns (provider, tier or None).
         Disabled via HERMES_AUTO_ROUTE=off, or when the user pinned a provider."""
@@ -2372,20 +2510,28 @@ class UltimateAgent:
         HookManager.fire("on_start")
         last_user = next((str(m.get("content") or "") for m in reversed(self.messages) if m.get("role") == "user"), "")
         loop_provider, route_tier = self._route_provider(last_user)
+        self._failed_providers = set()
         for i in range(max_iters):
             self.logs.append({"type": "llm_call", "iteration": i, "timestamp": time.time()})
             HookManager.fire("pre_llm", messages=self.messages)
-            schemas = self.registry.get_openai_schemas()
-            try: response = ProviderRouter.call(self.messages, schemas, loop_provider)
-            except Exception as e:
-                HookManager.fire("on_error", error=str(e))
-                if route_tier is not None:
-                    self.router.record_outcome(route_tier, success=False)
-                if loop_provider != self.provider:
-                    # routed provider failed — retry the loop on the user's provider
-                    loop_provider, route_tier = self.provider, None
-                    continue
-                return f"LLM Error: {e}"
+            # provider failover happens INSIDE the iteration — a dead provider must
+            # not consume the agent's reasoning budget
+            while True:
+                schemas = self.registry.get_openai_schemas()
+                if PROVIDER_CONFIGS.get(loop_provider, {}).get("local"):
+                    schemas = [s for s in schemas if s.get("function", {}).get("name") in CORE_TOOLS]
+                try:
+                    response = self._call_llm(self.messages, schemas, loop_provider)
+                    break
+                except Exception as e:
+                    HookManager.fire("on_error", error=str(e))
+                    if route_tier is not None:
+                        self.router.record_outcome(route_tier, success=False)
+                    fallback = self._next_fallback(loop_provider)
+                    if not fallback:
+                        return f"LLM Error: {e}"
+                    self.logs.append({"type": "provider_failover", "from": loop_provider, "to": fallback, "error": str(e)[:200]})
+                    loop_provider, route_tier = fallback, None
             self.messages.append({"role": "assistant", "content": response.content or ""})
             HookManager.fire("post_llm", content=response.content, tool_calls=getattr(response, "tool_calls", []))
             tcs = getattr(response, "tool_calls", [])

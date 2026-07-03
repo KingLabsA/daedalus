@@ -6,13 +6,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Optional
 
 DEFAULT_PROFILES: Dict[str, List[str]] = {
-    "code": ["deepseek", "anthropic", "openai", "mistral", "ollama", "hermes"],
-    "reasoning": ["openai", "anthropic", "deepseek", "google", "xai"],
-    "vision": ["openai", "google", "zhipu", "xai"],
-    "cheap": ["groq", "cerebras", "ollama", "hermes", "google", "novita"],
-    "creative": ["anthropic", "openai", "mistral", "moonshot"],
-    "long_context": ["google", "anthropic", "openai", "moonshot"],
-    "search": ["perplexity", "google", "openai"],
+    "code": ["deepseek", "anthropic", "openai", "mistral", "freellmapi", "ollama", "hermes"],
+    "reasoning": ["openai", "anthropic", "deepseek", "google", "xai", "freellmapi"],
+    "vision": ["openai", "google", "zhipu", "xai", "freellmapi"],
+    "cheap": ["groq", "cerebras", "ollama", "hermes", "freellmapi", "google", "novita"],
+    "creative": ["anthropic", "openai", "mistral", "moonshot", "freellmapi"],
+    "long_context": ["google", "anthropic", "openai", "moonshot", "freellmapi"],
+    "search": ["perplexity", "google", "openai", "freellmapi"],
 }
 
 TASK_KEYWORDS: Dict[str, List[str]] = {

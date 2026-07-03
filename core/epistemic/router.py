@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional
 
 # cost tier per provider: 0=local/free, 1=cheap, 2=mid, 3=strong, 4=premium
 PROVIDER_TIERS: Dict[str, int] = {
-    "ollama": 0, "hermes": 0,
+    "ollama": 0, "hermes": 0, "freellmapi": 0,
     "groq": 1, "cerebras": 1, "novita": 1, "huggingface": 1, "together": 1,
     "deepseek": 2, "google": 2, "mistral": 2, "fireworks": 2, "moonshot": 2, "zhipu": 2, "cohere": 2, "perplexity": 2,
     "openai": 3, "xai": 3, "openrouter": 3, "azure": 3, "bedrock": 3, "replicate": 2,

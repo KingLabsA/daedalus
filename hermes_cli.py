@@ -171,11 +171,20 @@ def cmd_tui():
                     elif handled:
                         console.print(handled)
                     continue
-            with console.status(f"[dim]thinking ({agent.provider})…[/]"):
+            streamed = {"n": 0}
+            def _on_token(t: str):
+                streamed["n"] += 1
+                console.print(t, end="", style="dim", highlight=False, soft_wrap=True)
+            agent.on_token = _on_token
+            try:
                 result = agent.run_loop([
                     {"role": "system", "content": agent.system_prompt},
                     {"role": "user", "content": u},
                 ])
+            finally:
+                agent.on_token = None
+            if streamed["n"]:
+                console.print()  # end the raw token stream before the rendered panel
             routed = next((l for l in reversed(agent.logs) if l.get("type") == "auto_route"), None)
             subtitle = f"routed → {routed['provider']} (tier {routed['tier']})" if routed else agent.provider
             console.print(Panel(Markdown(result or ""), title="hermes", subtitle=f"[dim]{subtitle}[/]",
@@ -198,11 +207,19 @@ def cmd_ws():
 
 def cmd_doctor():
     sys.path.insert(0, str(ROOT))
-    from agent_ultimate import PROVIDER_CONFIGS
+    from agent_ultimate import PROVIDER_CONFIGS, _live_providers
     from core.platform import DependencyScanner
     scanner = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
     report = scanner.scan()
     print(scanner.summary(report))
+    print()
+    print("Probing providers (validated, not just key-present)...")
+    live = _live_providers()
+    print("LIVE NOW:", ", ".join(live) if live else "none")
+    if "freellmapi" not in live:
+        print("  hint: FreeLLMAPI is configured but not running — launch it (localhost:3002) to unlock 67 models")
+    if "ollama" not in live:
+        print("  hint: start Ollama for free local models (ollama serve)")
     print()
     print(scanner.fix_script(report))
 
