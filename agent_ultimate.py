@@ -991,32 +991,36 @@ class CheckpointManager:
 
     @staticmethod
     def create_checkpoint(label: str = "") -> str:
-        """Create a git stash checkpoint."""
+        """Snapshot the working tree WITHOUT disturbing it.
+
+        Uses `git stash create` (builds a stash commit object but does not touch
+        the working tree or the stash stack) + `git stash store` (records it so
+        it's recoverable). This is non-destructive: creating a checkpoint never
+        removes the user's uncommitted work — unlike `git stash push`.
+        """
         try:
-            # Stage everything
-            subprocess.run(["git", "add", "-A"], capture_output=True, text=True)
-            # Check if there's anything to stash
             status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
             if not status.stdout.strip():
                 return "Nothing to checkpoint (clean working tree)"
-            # Create stash with label
             tag = label or f"checkpoint-{int(time.time())}"
-            r = subprocess.run(["git", "stash", "push", "-m", tag], capture_output=True, text=True)
-            # Save checkpoint metadata
+            created = subprocess.run(["git", "stash", "create", tag], capture_output=True, text=True)
+            sha = created.stdout.strip()
+            if not sha:
+                return "Nothing to checkpoint (no tracked changes)"
+            subprocess.run(["git", "stash", "store", "-m", tag, sha], capture_output=True, text=True)
             cp_dir = CHECKPOINTS_DIR / tag
             cp_dir.mkdir(parents=True, exist_ok=True)
             meta = {
                 "label": tag,
+                "sha": sha,
                 "timestamp": datetime.now().isoformat(),
-                "stash_output": r.stdout.strip(),
-                "files_changed": status.stdout.strip().count("\n") + (1 if status.stdout.strip() else 0),
+                "files_changed": status.stdout.strip().count("\n") + 1,
             }
             (cp_dir / "meta.json").write_text(json.dumps(meta, indent=2))
-            # Save diff snapshot
             diff = subprocess.run(["git", "diff", "HEAD"], capture_output=True, text=True)
             if diff.stdout:
                 (cp_dir / "snapshot.diff").write_text(diff.stdout)
-            return f"Checkpoint created: {tag} ({meta['files_changed']} files)"
+            return f"Checkpoint created: {tag} ({meta['files_changed']} files, working tree untouched)"
         except Exception as e: return f"Checkpoint error: {e}"
 
     @staticmethod
@@ -1033,9 +1037,14 @@ class CheckpointManager:
 
     @staticmethod
     def restore_checkpoint(label: str) -> str:
-        """Restore a checkpoint by popping the stash."""
+        """Apply a checkpoint by its stored SHA (non-destructive: keeps the stash)."""
         try:
-            r = subprocess.run(["git", "stash", "pop"], capture_output=True, text=True)
+            meta_file = CHECKPOINTS_DIR / label / "meta.json"
+            sha = None
+            if meta_file.exists():
+                sha = json.loads(meta_file.read_text()).get("sha")
+            cmd = ["git", "stash", "apply", sha] if sha else ["git", "stash", "apply"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode == 0:
                 return f"Restored checkpoint: {label}\n{r.stdout.strip()}"
             else:
