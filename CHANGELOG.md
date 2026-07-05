@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.3.0 — "Unified surfaces" (2026-07-03)
+
+### Phase 11 — Web/TUI parity
+- Web Chat now runs the full `run_loop` via `converse()` (streamed through a
+  thread-safe queue): auto-routing, provider failover, multi-iteration tools,
+  immune system, world model, calibration — previously the browser used a
+  hand-rolled handler on the default provider (which silently hung on a bad key)
+- Response carries `toolCalls` + `routedTo`; Chat shows a "routed → X" badge
+- `converse()` adopts a loaded session for continuity; e2e adds 9 command assertions
+
+### Fix — checkpoints are non-destructive
+- `create_checkpoint` used `git stash push`, which removed uncommitted changes
+  from the working tree (silently discarding in-progress work). Now uses
+  `git stash create` + `store` (snapshot without touching the tree) and
+  `apply <sha>` for restore. 3 regression tests.
+
+**Stats**: 202 tests · web + terminal at feature parity
+
 ## 1.2.0 — "Ship-ready CLI + Web" (2026-07-03)
 
 Turned the deep-brain agent into a usable product across terminal and browser.
