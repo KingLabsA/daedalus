@@ -135,6 +135,37 @@ def cmd_tui():
 
     console = Console()
     agent = UltimateAgent()
+
+    # persistent input history (up-arrow) across sessions
+    try:
+        import readline
+        hist = Path.home() / ".hermes" / "cli_history"
+        hist.parent.mkdir(parents=True, exist_ok=True)
+        if hist.exists():
+            readline.read_history_file(str(hist))
+        readline.set_history_length(1000)
+        import atexit
+        atexit.register(lambda: readline.write_history_file(str(hist)))
+    except Exception:
+        pass
+
+    # diff-approve: render destructive tool calls and ask before they run
+    def _approve(tool: str, args: dict, preview: str) -> bool:
+        from rich.syntax import Syntax
+        lang = "diff" if preview.startswith(("---", "@@", "-", "+")) or "\n+" in preview else "bash"
+        console.print(Panel(Syntax(preview, lang, theme="ansi_dark", word_wrap=True),
+                            title=f"[yellow]approve {tool}?[/]", border_style="yellow"))
+        try:
+            ans = console.input("[yellow]apply? [y/N/a=allow-all] ▸ [/]").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if ans == "a":
+            agent.safety.mode = "auto"
+            console.print("[dim]safety → auto (approving remaining writes this session)[/]")
+            return True
+        return ans in ("y", "yes")
+    agent.approve_fn = _approve
+
     if not agent.profiler.exists() and sys.stdin.isatty():
         agent.first_launch_setup()
 
@@ -145,7 +176,7 @@ def cmd_tui():
         f"provider [cyan]{agent.provider}[/] ({MODEL_NAME}) · auto-routing [green]on[/]\n"
         f"[dim]{stats['memories']} memories · {stats['failures']} antibodies · "
         f"{len(agent.registry.list_tools())} tools · persona: {profile.get('persona_label', '—')}[/]\n"
-        f"[dim]/help for commands · exit to quit[/]",
+        f"[dim]/help commands · /reset new chat · ↑ history · Ctrl-C interrupt · exit to quit[/]",
         border_style="magenta",
     ))
 
@@ -176,19 +207,28 @@ def cmd_tui():
                 streamed["n"] += 1
                 console.print(t, end="", style="dim", highlight=False, soft_wrap=True)
             agent.on_token = _on_token
+            interrupted = False
             try:
-                result = agent.run_loop([
-                    {"role": "system", "content": agent.system_prompt},
-                    {"role": "user", "content": u},
-                ])
+                result = agent.converse(u)  # multi-turn continuity
+            except KeyboardInterrupt:
+                interrupted = True
+                result = "[interrupted by user]"
             finally:
                 agent.on_token = None
             if streamed["n"]:
                 console.print()  # end the raw token stream before the rendered panel
+            if interrupted:
+                console.print("[yellow]⏹ interrupted[/]")
+                continue
             routed = next((l for l in reversed(agent.logs) if l.get("type") == "auto_route"), None)
+            failover = [l for l in agent.logs if l.get("type") == "provider_failover"]
             subtitle = f"routed → {routed['provider']} (tier {routed['tier']})" if routed else agent.provider
+            if failover:
+                subtitle += f" · failover→{failover[-1]['to']}"
             console.print(Panel(Markdown(result or ""), title="hermes", subtitle=f"[dim]{subtitle}[/]",
                                 border_style="blue", title_align="left", subtitle_align="right"))
+        except KeyboardInterrupt:
+            console.print("\n[yellow]⏹ interrupted[/]")
         except Exception as exc:
             console.print(f"[red]error:[/] {exc}")
     agent.subconscious.stop()

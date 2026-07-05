@@ -66,6 +66,17 @@ CORE_TOOLS = [
     "grep", "list_files", "git_status", "git_diff_preview", "git_commit",
     "semantic_search", "search_index", "remember", "recall_memory", "task_board", "execute_python",
 ]
+# tools that modify the filesystem/system — subject to interactive diff-approval
+DESTRUCTIVE_TOOLS = {"write_file", "append_file", "edit_file_line", "run_command", "git_commit", "git_push", "git_undo"}
+def _is_destructive(name: str) -> bool:
+    return name in DESTRUCTIVE_TOOLS
+
+def _unified_diff(old: str, new: str, path: str) -> str:
+    import difflib
+    lines = list(difflib.unified_diff(
+        old.splitlines(), new.splitlines(),
+        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=2))
+    return "\n".join(lines[:200]) if lines else "(no textual change)"
 
 # Streaming queue for live command output
 _stream_queue: List[Dict] = []
@@ -2202,6 +2213,8 @@ class UltimateAgent:
         self.provider = LLM_PROVIDER
         self._provider_pinned = False
         self.on_token: Optional[Callable[[str], None]] = None  # set by TUIs for live streaming
+        self.approve_fn: Optional[Callable[[str, dict, str], bool]] = None  # (tool, args, preview) -> approve?
+        self.convo: List[Dict] = []  # persistent multi-turn conversation for converse()
         self.logs: List[Dict] = []
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
@@ -2250,6 +2263,34 @@ class UltimateAgent:
             persona_str = f"\n{addendum}"
         self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
+    def _preview_write(self, tool: str, args: dict) -> str:
+        """Human-readable preview of a destructive tool call for approval."""
+        try:
+            if tool == "write_file":
+                path = args.get("filepath", "")
+                old = Path(path).read_text(errors="replace") if Path(path).exists() else ""
+                return _unified_diff(old, args.get("content", ""), path)
+            if tool == "append_file":
+                return f"APPEND to {args.get('filepath','')}:\n+ " + str(args.get("content", ""))[:1000]
+            if tool == "edit_file_line":
+                return (f"EDIT {args.get('filepath','')}\n- {str(args.get('old_string',''))[:400]}\n"
+                        f"+ {str(args.get('new_string',''))[:400]}")
+            if tool in ("run_command", "git_commit", "git_push", "git_undo"):
+                return f"$ {args.get('command') or args.get('message') or tool}"
+        except Exception as exc:
+            return f"(preview unavailable: {exc})"
+        return json.dumps(args)[:500]
+
+    def converse(self, user_text: str, max_iters: int = 10) -> str:
+        """Multi-turn: keeps self.convo across calls so the CLI/TUI is a real
+        conversation, not a fresh context each turn. Context engine trims as needed."""
+        if not self.convo or self.convo[0].get("role") != "system":
+            self.convo = [{"role": "system", "content": self.system_prompt}]
+        self.convo.append({"role": "user", "content": user_text})
+        result = self.run_loop(self.convo, max_iters=max_iters)
+        self.convo = self.messages  # run_loop grew self.messages with the full exchange
+        return result
+
     def _call_llm(self, messages: List[Dict], schemas: List[Dict], provider: str):
         """One retry with backoff; streams through self.on_token when set."""
         for attempt in (1, 2):
@@ -2547,13 +2588,23 @@ class UltimateAgent:
                 calls.append({"id": tc.id if hasattr(tc,"id") else tc["id"], "name": f.name if hasattr(f,"name") else f["name"], "args": json.loads(f.arguments if hasattr(f,"arguments") else f["arguments"])})
             # Safety check
             approved_calls = []
+            denied_notes = []
             for call in calls:
                 ok, reason = self.safety.should_approve(call["name"], call["args"])
+                # interactive approval (TUI diff-approve) overrides suggest-mode blocking
+                if not ok and self.approve_fn and _is_destructive(call["name"]):
+                    if self.approve_fn(call["name"], call["args"], self._preview_write(call["name"], call["args"])):
+                        ok = True
                 if ok:
                     approved_calls.append(call)
                 else:
                     self.logs.append({"type": "approval_needed", "id": reason, "tool": call["name"]})
+                    denied_notes.append(f"{call['name']} (denied by user)")
             if not approved_calls:
+                if self.approve_fn and denied_notes:
+                    # feed the denial back so the agent can adapt instead of dead-ending
+                    self.messages.append({"role": "user", "content": f"[USER DENIED] {', '.join(denied_notes)}. Suggest an alternative or ask what to do."})
+                    continue
                 return "All tool calls require approval. Use suggest mode or approve via WS."
             HookManager.fire("pre_tool", calls=approved_calls)
             results = self.registry.execute_parallel(approved_calls)
@@ -2624,6 +2675,7 @@ class UltimateAgent:
         should go to the LLM. Used by the plain CLI, the rich TUI, and tests."""
         if u == "/reset":
             self.messages = [{"role":"system","content":self.system_prompt}]
+            self.convo = []
             return "Reset."
         if u.startswith("/provider"):
             p = u.split(" ", 1)[1] if " " in u else ""
@@ -2768,7 +2820,10 @@ class UltimateAgent:
             if handled is not None:
                 if handled: print(handled)
                 continue
-            result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":u}])
+            try:
+                result = self.converse(u)
+            except KeyboardInterrupt:
+                print("\n[interrupted]\n"); continue
             print(f"\n{result}\n")
 
 async def run_ws_server(agent):
