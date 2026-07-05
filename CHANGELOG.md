@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.2.0 — "Ship-ready CLI + Web" (2026-07-03)
+
+Turned the deep-brain agent into a usable product across terminal and browser.
+
+### Phase 8 — Product surfaces
+- `hermes` launcher (`pip install -e .`): `tui` (default) / `web` / `ws` / `doctor` / `models`
+- Rich terminal TUI; self-served web IDE (Python serves built frontend, one process)
+- WebSocket token auth (`HERMES_WS_TOKEN`); `handle_command` extracted (UI-agnostic)
+
+### Phase 9 — Reliability (local-first, free-only)
+- `freellmapi` provider (localhost:3002 gateway, 67 free models); added to router + orchestra
+- Validated provider liveness (probes `/models`, not just key presence; 5-min cache)
+- Local guardrails: 16-tool `CORE_TOOLS` for local models, `num_ctx` cap, per-call timeout
+- Retry-once + provider failover inside the loop; `MODEL_NAME` scoped to selected provider
+- Token streaming (`agent.on_token`); `install.sh`, `QUICKSTART.md`, valid build backend
+- First verified live agent round-trip
+
+### Phase 10 — Conversation UX
+- Multi-turn continuity (`converse()` keeps context across turns; `/reset` clears)
+- Diff-approve: colored diff/command preview + y/N/a before destructive tools; denials feed back
+- Rich TUI input history (up-arrow, persisted), per-turn Ctrl-C interrupt
+
+**Stats**: 199 tests · 23 providers · local-first auto-routing · terminal + web surfaces
+
 ## 1.0.0 — "Deep Mind" (2026-07-02)
 
 Six-phase evolution from autonomous coding agent to a self-evolving, multimodal,
