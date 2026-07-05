@@ -118,9 +118,21 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
                 role: "assistant",
                 content: data.content,
                 timestamp: new Date(),
+                toolCalls: data.toolCalls,
+                routedTo: data.routedTo,
               });
               st.setStreamingContent("");
               st.setStreamingMessageId(null);
+            } else if (data.content) {
+              // non-streaming providers: no tokens arrived, still show the answer
+              st.addMessage({
+                id: `resp-${Date.now()}`,
+                role: "assistant",
+                content: data.content,
+                timestamp: new Date(),
+                toolCalls: data.toolCalls,
+                routedTo: data.routedTo,
+              });
             }
             break;
           case "files":

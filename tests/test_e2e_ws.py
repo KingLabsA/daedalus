@@ -102,6 +102,16 @@ async def main():
             await test_cmd(ws, "repo:map:.", "repo_map", "repo_map", timeout=15)
             await test_cmd(ws, "system_prompt", "system_prompt", "sys_prompt")
             await test_cmd(ws, "session:save", "notification", "session_save")
+            # New Deep Mind command surface (Phases 1-11)
+            await test_cmd(ws, "memory", "memory", "memory_stats")
+            await test_cmd(ws, "subconscious", "subconscious", "subconscious")
+            await test_cmd(ws, "calibration", "calibration", "calibration")
+            await test_cmd(ws, "experts", "experts", "experts")
+            await test_cmd(ws, "doctor", "doctor", "doctor", timeout=20)
+            await test_cmd(ws, "advisor", "advisor", "advisor")
+            await test_cmd(ws, "route:fix a typo", "route", "route")
+            await test_cmd(ws, "blast:agent_ultimate.py", "blast", "blast", timeout=20)
+            await test_cmd(ws, "mcp", "mcp", "mcp")
     except Exception as e:
         print(f"Error: {e}")
         import traceback

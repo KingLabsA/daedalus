@@ -4,6 +4,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   toolCalls?: { name: string; args: Record<string, string> }[];
+  routedTo?: string;
 }
 
 export interface KanbanTask {

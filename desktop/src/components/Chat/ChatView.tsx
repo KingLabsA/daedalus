@@ -183,6 +183,11 @@ export default function ChatView() {
                 {tc.name}({JSON.stringify(tc.args)})
               </div>
             ))}
+            {m.routedTo && (
+              <div style={{ fontSize: 10, color: "#7c7cff", marginTop: 4, opacity: 0.75 }}>
+                routed → {m.routedTo}
+              </div>
+            )}
           </div>
         ))}
         {streamingMessageId && streamingContent && (

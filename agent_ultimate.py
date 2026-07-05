@@ -1830,63 +1830,42 @@ class WebSocketServer:
                 data = json.loads(message)
                 msg_type = data.get("type", "chat")
                 if msg_type == "chat":
-                    # Safety check
-                    approved, reason = self.agent.safety.should_approve("chat", data)
-                    if not approved:
-                        await websocket.send(json.dumps({"type":"approval_needed","id":reason,"tool":"chat","args":data}))
-                        continue
-                    # Streaming chat
-                    self.agent.messages.append({"role":"user","content":data["text"]})
-                    HookManager.fire("pre_llm", messages=self.agent.messages)
-                    schemas = self.agent.registry.get_openai_schemas()
-                    content_parts = []
-                    tool_calls = []
-                    for chunk_text, result, usage in ProviderRouter.call_stream(self.agent.messages, schemas, self.agent.provider):
-                        if chunk_text:
-                            content_parts.append(chunk_text)
-                            await websocket.send(json.dumps({"type":"token", "content":chunk_text}))
-                        if result:
-                            content_parts = [result.content or ""]
-                            tool_calls = result.tool_calls
-                    HookManager.fire("post_llm", content="".join(content_parts), tool_calls=tool_calls)
-                    full_content = "".join(content_parts)
-                    self.agent.messages.append({"role":"assistant","content":full_content})
-                    if tool_calls:
-                        calls = []
-                        for tc in tool_calls:
-                            f = tc.get("function", tc) if isinstance(tc, dict) else getattr(tc, "function", tc)
-                            calls.append({"id": tc.get("id","") if isinstance(tc,dict) else getattr(tc,"id",""), "name": f.get("name","") if isinstance(f,dict) else getattr(f,"name",""), "args": json.loads(f.get("arguments","{}") if isinstance(f,dict) else getattr(f,"arguments","{}"))})
-                        # Safety check for each tool call
-                        approved_calls = []
-                        for call in calls:
-                            ok, reason = self.agent.safety.should_approve(call["name"], call["args"])
-                            if ok:
-                                approved_calls.append(call)
-                            else:
-                                await websocket.send(json.dumps({"type":"approval_needed","id":reason,"tool":call["name"],"args":call["args"]}))
-                        if approved_calls:
-                            HookManager.fire("pre_tool", calls=approved_calls)
-                            results = self.agent.registry.execute_parallel(approved_calls)
-                            HookManager.fire("post_tool", results=results)
-                            for res in results:
-                                self.agent.messages.append({"role":"tool","tool_call_id":res["id"],"content":res["result"]})
-                            # Auto-heal on tool errors
-                            for res in results:
-                                if "Error" in res["result"] or "ToolError" in res["result"]:
-                                    for c in approved_calls:
-                                        if c["id"] == res["id"]:
-                                            fix = SelfHealer.auto_fix(c["name"], res["result"], c["args"])
-                                            if fix:
-                                                self.agent.logs.append({"type":"auto_fix", "tool": c["name"], "fix": fix})
-                            # Run another LLM iteration with tool results
-                            for chunk_text, result2, _ in ProviderRouter.call_stream(self.agent.messages, schemas, self.agent.provider):
-                                if chunk_text:
-                                    await websocket.send(json.dumps({"type":"token", "content":chunk_text}))
-                                if result2:
-                                    full_content = result2.content or ""
-                            self.agent.messages.append({"role":"assistant","content":full_content})
+                    # Full agent loop (auto-routing, failover, multi-iteration tools,
+                    # immune system, world model, calibration) with live token streaming.
+                    text = data["text"]
+                    loop = asyncio.get_event_loop()
+                    token_q: "asyncio.Queue" = asyncio.Queue()
+                    turn_start = len(self.agent.logs)
+
+                    def _on_tok(t):
+                        loop.call_soon_threadsafe(token_q.put_nowait, t)
+                    self.agent.on_token = _on_tok
+
+                    async def _drain():
+                        while True:
+                            tok = await token_q.get()
+                            if tok is None:
+                                break
+                            await websocket.send(json.dumps({"type": "token", "content": tok}))
+                    drain_task = asyncio.create_task(_drain())
+                    try:
+                        result = await loop.run_in_executor(None, self.agent.converse, text)
+                    except Exception as e:
+                        result = f"Error: {e}"
+                    finally:
+                        self.agent.on_token = None
+                        loop.call_soon_threadsafe(token_q.put_nowait, None)
+                    await drain_task
+                    self.agent.messages = self.agent.convo
                     self.agent.store.save(self.agent.session_id, self.agent.messages)
-                    await websocket.send(json.dumps({"type":"response","content":full_content,"toolCalls":[{"name":c["name"],"args":c["args"]} for c in tool_calls] if tool_calls else []}))
+                    turn_logs = self.agent.logs[turn_start:]
+                    tool_calls = [{"name": l["name"], "args": l.get("args", {})} for l in turn_logs if l.get("type") == "tool_call"]
+                    routed = next((l for l in reversed(turn_logs) if l.get("type") == "auto_route"), None)
+                    await websocket.send(json.dumps({
+                        "type": "response", "content": result,
+                        "toolCalls": tool_calls,
+                        "routedTo": routed.get("provider") if routed else self.agent.provider,
+                    }))
                 elif msg_type == "command":
                     cmd = data["command"]
                     if cmd == "kanban":
