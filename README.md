@@ -152,6 +152,8 @@ cd desktop && npm run dev
 | `/models` | Models this machine can run |
 | `/profile [rebuild]` | Show / rebuild your persona profile |
 | `/mcp list\|tools\|call` | MCP servers, tools, invocation |
+| `@path/to/file` | Attach a file's contents into your message |
+| `Ctrl-C` (TUI) / Stop (web) | Cancel the current run mid-stream |
 
 ## WebSocket Protocol
 

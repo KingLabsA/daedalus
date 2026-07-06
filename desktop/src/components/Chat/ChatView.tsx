@@ -242,15 +242,20 @@ export default function ChatView() {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
           }}
           data-chat-input="true"
-          placeholder={connected ? "Type a message or /command... (⌘K)" : "Agent offline"}
+          placeholder={connected ? "Message, /command, or @file... (⌘K)" : "Agent offline"}
           disabled={loading || !connected}
         />
-        <button style={{
-          ...styles.sendBtn,
-          opacity: loading || !connected ? 0.5 : 1,
-        }} onClick={handleSend} disabled={loading || !connected}>
-          {loading ? "..." : "Send"}
-        </button>
+        {loading ? (
+          <button style={{ ...styles.sendBtn, background: "#a03d3d" }}
+            onClick={() => command("cancel")} title="Stop the current run">
+            Stop
+          </button>
+        ) : (
+          <button style={{ ...styles.sendBtn, opacity: !connected ? 0.5 : 1 }}
+            onClick={handleSend} disabled={!connected}>
+            Send
+          </button>
+        )}
       </div>
     </div>
   );

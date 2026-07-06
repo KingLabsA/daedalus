@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.0 — "Mentions & control" (2026-07-03)
+
+- **@file mentions**: `@path` in any message attaches that file's contents
+  (Cursor-style), across CLI, TUI, and web
+- **Real cancellation**: cancel_event checked per iteration and mid-stream —
+  TUI `Ctrl-C`, web **Stop** button, or `cancel` WS command; returns `[cancelled]`
+- 218 tests
+
 ## 1.3.0 — "Unified surfaces" (2026-07-03)
 
 ### Phase 11 — Web/TUI parity
