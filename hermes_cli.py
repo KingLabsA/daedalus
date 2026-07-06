@@ -212,6 +212,7 @@ def cmd_tui():
                 result = agent.converse(u)  # multi-turn continuity
             except KeyboardInterrupt:
                 interrupted = True
+                agent.cancel_event.set()  # stop any in-flight stream cleanly
                 result = "[interrupted by user]"
             finally:
                 agent.on_token = None

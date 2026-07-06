@@ -71,6 +71,37 @@ DESTRUCTIVE_TOOLS = {"write_file", "append_file", "edit_file_line", "run_command
 def _is_destructive(name: str) -> bool:
     return name in DESTRUCTIVE_TOOLS
 
+class _Cancelled(Exception):
+    """Raised to abort an in-flight agent run when cancel_event is set."""
+
+_MENTION_RE = re.compile(r"(?<![\w/])@([\w./\-]+\.\w+|[\w./\-]+/[\w./\-]+)")
+def _expand_mentions(text: str, max_files: int = 6, max_bytes: int = 60_000) -> str:
+    """Expand @path references into attached file contents (like Cursor's @file).
+    Only real files under the cwd are attached; the original text is preserved."""
+    seen, attachments, budget = set(), [], max_bytes
+    for m in _MENTION_RE.finditer(text or ""):
+        rel = m.group(1)
+        if rel in seen or len(attachments) >= max_files:
+            continue
+        seen.add(rel)
+        p = Path(rel)
+        try:
+            if not p.is_file():
+                continue
+            data = p.read_text(errors="replace")
+        except OSError:
+            continue
+        if len(data) > budget:
+            data = data[:budget] + "\n[...truncated]"
+        budget -= min(len(data), budget)
+        lang = p.suffix.lstrip(".") or ""
+        attachments.append(f"### {rel}\n```{lang}\n{data}\n```")
+        if budget <= 0:
+            break
+    if not attachments:
+        return text
+    return text + "\n\n[Attached files referenced with @]\n" + "\n\n".join(attachments)
+
 def _unified_diff(old: str, new: str, path: str) -> str:
     import difflib
     lines = list(difflib.unified_diff(
@@ -1994,6 +2025,9 @@ class WebSocketServer:
                             await websocket.send(json.dumps({"type":"mcp_tools", "data":self.agent.mcp.list_tools(server_name)}))
                         except Exception as e:
                             await websocket.send(json.dumps({"type":"notification", "content":f"MCP error: {e}"}))
+                    elif cmd == "cancel":
+                        self.agent.cancel_event.set()
+                        await websocket.send(json.dumps({"type":"notification", "content":"Cancelling current run..."}))
                     elif cmd == "mcp":
                         await websocket.send(json.dumps({"type":"mcp", "data":self.agent.mcp.status()}))
                     elif cmd == "calibration":
@@ -2203,6 +2237,7 @@ class UltimateAgent:
         self.on_token: Optional[Callable[[str], None]] = None  # set by TUIs for live streaming
         self.approve_fn: Optional[Callable[[str, dict, str], bool]] = None  # (tool, args, preview) -> approve?
         self.convo: List[Dict] = []  # persistent multi-turn conversation for converse()
+        self.cancel_event = threading.Event()  # set to abort an in-flight run (TUI Ctrl-C / WS cancel)
         self.logs: List[Dict] = []
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
@@ -2274,7 +2309,8 @@ class UltimateAgent:
         conversation, not a fresh context each turn. Context engine trims as needed."""
         if not self.convo or self.convo[0].get("role") != "system":
             self.convo = [{"role": "system", "content": self.system_prompt}]
-        self.convo.append({"role": "user", "content": user_text})
+        self.cancel_event.clear()
+        self.convo.append({"role": "user", "content": _expand_mentions(user_text)})
         result = self.run_loop(self.convo, max_iters=max_iters)
         self.convo = self.messages  # run_loop grew self.messages with the full exchange
         return result
@@ -2286,6 +2322,8 @@ class UltimateAgent:
                 if self.on_token:
                     return self._call_llm_stream(messages, schemas, provider)
                 return ProviderRouter.call(messages, schemas, provider)
+            except _Cancelled:
+                raise  # user cancellation is not a retryable failure
             except Exception:
                 if attempt == 2:
                     raise
@@ -2295,6 +2333,8 @@ class UltimateAgent:
         parts: List[str] = []
         final = None
         for chunk, result, usage in ProviderRouter.call_stream(messages, schemas, provider):
+            if self.cancel_event.is_set():
+                raise _Cancelled()
             if chunk:
                 parts.append(chunk)
                 try:
@@ -2541,6 +2581,10 @@ class UltimateAgent:
         loop_provider, route_tier = self._route_provider(last_user)
         self._failed_providers = set()
         for i in range(max_iters):
+            if self.cancel_event.is_set():
+                self.cancel_event.clear()
+                HookManager.fire("on_stop")
+                return "[cancelled]"
             self.logs.append({"type": "llm_call", "iteration": i, "timestamp": time.time()})
             HookManager.fire("pre_llm", messages=self.messages)
             # provider failover happens INSIDE the iteration — a dead provider must
@@ -2552,6 +2596,10 @@ class UltimateAgent:
                 try:
                     response = self._call_llm(self.messages, schemas, loop_provider)
                     break
+                except _Cancelled:
+                    self.cancel_event.clear()
+                    HookManager.fire("on_stop")
+                    return "[cancelled]"
                 except Exception as e:
                     HookManager.fire("on_error", error=str(e))
                     if route_tier is not None:
