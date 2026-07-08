@@ -195,6 +195,11 @@ class ChangesetManager:
     def list_turns(self) -> List[Dict]:
         return [{"id": t["id"], "files": len(t["entries"])} for t in self._turns if t["entries"]]
 
+    def original(self, cs_id: str, path: str) -> Optional[str]:
+        """Pre-edit content of a file in a changeset (for external diff viewers)."""
+        entry = self._entry(cs_id, path)
+        return entry["old"] if entry else None
+
     def accept(self, cs_id: str, path: str) -> str:
         entry = self._entry(cs_id, path)
         if not entry:

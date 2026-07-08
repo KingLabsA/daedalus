@@ -150,6 +150,16 @@ def test_chained_edits_same_turn_diff_against_original(cs):
     assert Path("c.txt").read_text() == "v0\n"  # revert goes to ORIGINAL, not v1
 
 
+def test_original_returns_pre_edit_content(cs):
+    Path("o.txt").write_text("before\n")
+    cs.begin_turn()
+    _write(cs, "o.txt", "after\n")
+    cs_id = cs.summary()["id"]
+    assert cs.original(cs_id, "o.txt") == "before\n"
+    assert cs.original(cs_id, "ghost.txt") is None
+    assert cs.original("cs_999", "o.txt") is None
+
+
 def test_safe_repo_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src").mkdir()

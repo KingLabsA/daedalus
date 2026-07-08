@@ -2039,6 +2039,10 @@ class WebSocketServer:
                             await websocket.send(json.dumps({"type":"mcp_tools", "data":self.agent.mcp.list_tools(server_name)}))
                         except Exception as e:
                             await websocket.send(json.dumps({"type":"notification", "content":f"MCP error: {e}"}))
+                    elif cmd.startswith("changeset:old:"):
+                        _, _, cs_id, cs_path = cmd.split(":", 3)
+                        old = self.agent.changesets.original(cs_id, cs_path)
+                        await websocket.send(json.dumps({"type":"changeset_old", "data":{"id": cs_id, "path": cs_path, "old": old}}))
                     elif cmd == "changeset:list":
                         await websocket.send(json.dumps({"type":"changesets", "data":self.agent.changesets.list_turns()}))
                     elif cmd.startswith("changeset:accept:"):
