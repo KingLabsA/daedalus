@@ -6,7 +6,7 @@ import { ChangesetSummary } from "../../types";
  *  Accept keeps the applied edit; Reject restores the original content. */
 
 const STATUS_COLOR: Record<string, string> = {
-  applied: "#ffcc66", accepted: "#66dd99", reverted: "#ff8877",
+  applied: "#ffcc66", accepted: "#66dd99", reverted: "#ff8877", partial: "#7c7cff",
 };
 
 function DiffBlock({ diff }: { diff: string }) {
@@ -65,7 +65,29 @@ export default function ChangesetReview({ changeset }: { changeset: ChangesetSum
               </>
             )}
           </div>
-          {open[f.path] && <div style={{ padding: "0 10px 10px" }}><DiffBlock diff={f.diff} /></div>}
+          {open[f.path] && (
+            <div style={{ padding: "0 10px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+              {(f.hunks && f.hunks.length > 1 ? f.hunks : null)?.map((h) => (
+                <div key={h.index} style={{ border: "1px solid #2a2a3e", borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 8px", background: "#1e1e34" }}>
+                    <span style={{ fontSize: 10.5, color: "#9a9ab8", flex: 1 }}>hunk {h.index + 1}/{f.hunks!.length}</span>
+                    <span style={{ fontSize: 9.5, fontWeight: 700, color: STATUS_COLOR[h.status] || "#999" }}>
+                      {h.status.toUpperCase()}
+                    </span>
+                    {h.status === "applied" && (
+                      <>
+                        <button style={{ ...miniBtn, borderColor: "#2f6e4a", color: "#66dd99" }}
+                          onClick={() => sendCommand(`changeset:accept_hunk:${cs.id}:${h.index}:${f.path}`)}>✓</button>
+                        <button style={{ ...miniBtn, borderColor: "#6e2f2f", color: "#ff8877" }}
+                          onClick={() => sendCommand(`changeset:reject_hunk:${cs.id}:${h.index}:${f.path}`)}>✗</button>
+                      </>
+                    )}
+                  </div>
+                  <DiffBlock diff={h.diff} />
+                </div>
+              )) || <DiffBlock diff={f.diff} />}
+            </div>
+          )}
         </div>
       ))}
     </div>

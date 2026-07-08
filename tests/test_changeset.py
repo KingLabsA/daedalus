@@ -81,6 +81,75 @@ def test_hooks_never_raise(cs):
     cs._on_post_tool(results=None)
 
 
+SRC = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\n"
+DST = "line1\nCHANGED2\nline3\nline4\nline5\nline6\nCHANGED7\nline8\n"  # two separated edits
+
+
+def test_two_separated_edits_two_hunks(cs):
+    Path("h.txt").write_text(SRC)
+    cs.begin_turn()
+    _write(cs, "h.txt", DST)
+    f = cs.summary()["files"][0]
+    assert len(f["hunks"]) == 2
+    assert "-line2" in f["hunks"][0]["diff"] and "+CHANGED2" in f["hunks"][0]["diff"]
+    assert "-line7" in f["hunks"][1]["diff"] and "+CHANGED7" in f["hunks"][1]["diff"]
+
+
+def test_reject_one_hunk_keeps_other(cs):
+    Path("h.txt").write_text(SRC)
+    cs.begin_turn()
+    _write(cs, "h.txt", DST)
+    cs_id = cs.summary()["id"]
+    assert "Reverted hunk 0" in cs.reject_hunk(cs_id, "h.txt", 0)
+    content = Path("h.txt").read_text()
+    assert "line2" in content and "CHANGED2" not in content   # hunk 0 restored
+    assert "CHANGED7" in content and "line7\n" not in content  # hunk 1 kept
+    f = cs.summary(cs_id)["files"][0]
+    assert f["status"] == "partial"
+    assert f["hunks"][0]["status"] == "reverted" and f["hunks"][1]["status"] == "applied"
+
+
+def test_reject_all_hunks_equals_full_revert(cs):
+    Path("h.txt").write_text(SRC)
+    cs.begin_turn()
+    _write(cs, "h.txt", DST)
+    cs_id = cs.summary()["id"]
+    cs.reject_hunk(cs_id, "h.txt", 0)
+    cs.reject_hunk(cs_id, "h.txt", 1)
+    assert Path("h.txt").read_text() == SRC
+    assert cs.summary(cs_id)["files"][0]["status"] == "reverted"
+
+
+def test_accept_hunk_and_bounds(cs):
+    Path("h.txt").write_text(SRC)
+    cs.begin_turn()
+    _write(cs, "h.txt", DST)
+    cs_id = cs.summary()["id"]
+    assert "Accepted hunk 1" in cs.accept_hunk(cs_id, "h.txt", 1)
+    assert cs.summary(cs_id)["files"][0]["hunks"][1]["status"] == "accepted"
+    assert "No hunk 9" in cs.accept_hunk(cs_id, "h.txt", 9)
+    assert "already reverted" in (cs.reject_hunk(cs_id, "h.txt", 1) and cs.reject_hunk(cs_id, "h.txt", 1))
+
+
+def test_created_file_reject_all_hunks_deletes(cs):
+    cs.begin_turn()
+    _write(cs, "fresh.txt", "brand new\n")
+    cs_id = cs.summary()["id"]
+    assert len(cs.summary(cs_id)["files"][0]["hunks"]) == 1
+    cs.reject_hunk(cs_id, "fresh.txt", 0)
+    assert not Path("fresh.txt").exists()
+
+
+def test_chained_edits_same_turn_diff_against_original(cs):
+    Path("c.txt").write_text("v0\n")
+    cs.begin_turn()
+    _write(cs, "c.txt", "v1\n", cid="c1")
+    _write(cs, "c.txt", "v2\n", cid="c2")
+    cs_id = cs.summary()["id"]
+    cs.reject(cs_id, "c.txt")
+    assert Path("c.txt").read_text() == "v0\n"  # revert goes to ORIGINAL, not v1
+
+
 def test_safe_repo_path(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "src").mkdir()

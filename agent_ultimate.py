@@ -2045,6 +2045,14 @@ class WebSocketServer:
                         _, _, cs_id, cs_path = cmd.split(":", 3)
                         note = self.agent.changesets.accept(cs_id, cs_path)
                         await websocket.send(json.dumps({"type":"changeset_update", "data":{"id": cs_id, "note": note, **self.agent.changesets.summary(cs_id)}}))
+                    elif cmd.startswith("changeset:accept_hunk:"):
+                        _, _, cs_id, hunk_i, cs_path = cmd.split(":", 4)
+                        note = self.agent.changesets.accept_hunk(cs_id, cs_path, int(hunk_i))
+                        await websocket.send(json.dumps({"type":"changeset_update", "data":{"id": cs_id, "note": note, **self.agent.changesets.summary(cs_id)}}))
+                    elif cmd.startswith("changeset:reject_hunk:"):
+                        _, _, cs_id, hunk_i, cs_path = cmd.split(":", 4)
+                        note = self.agent.changesets.reject_hunk(cs_id, cs_path, int(hunk_i))
+                        await websocket.send(json.dumps({"type":"changeset_update", "data":{"id": cs_id, "note": note, **self.agent.changesets.summary(cs_id)}}))
                     elif cmd.startswith("changeset:reject:"):
                         _, _, cs_id, cs_path = cmd.split(":", 3)
                         note = self.agent.changesets.reject(cs_id, cs_path)

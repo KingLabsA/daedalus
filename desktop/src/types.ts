@@ -8,9 +8,15 @@ export interface Message {
   changeset?: ChangesetSummary;
 }
 
+export interface ChangesetHunk {
+  index: number;
+  status: string;
+  diff: string;
+}
+
 export interface ChangesetSummary {
   id: string;
-  files: { path: string; tool?: string; status: string; diff: string }[];
+  files: { path: string; tool?: string; status: string; diff: string; hunks?: ChangesetHunk[] }[];
 }
 
 export interface KanbanTask {
