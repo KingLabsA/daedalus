@@ -5,7 +5,7 @@
 _EXPORTS = {
     "UltimateAgent": "agent_ultimate", "ToolRegistry": "agent_ultimate", "registry": "agent_ultimate",
     "SessionStore": "agent_ultimate", "compress_messages": "agent_ultimate",
-    "ProviderRouter": "agent_ultimate",
+    "ProviderRouter": "core.providers",
     "SelfLearner": "agent_ultimate", "SelfHealer": "agent_ultimate", "SelfVerifier": "agent_ultimate",
     "AdvancedBrowser": "agent_ultimate", "DesktopController": "agent_ultimate",
     "KanbanBoard": "agent_ultimate", "KanbanTask": "agent_ultimate", "KanbanWorker": "agent_ultimate",
