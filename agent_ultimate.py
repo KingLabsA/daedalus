@@ -15,6 +15,7 @@ from core.senses import ModelOrchestra, Vision, VoiceIO
 from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
 from core.platform import McpClient, DependencyScanner, ProfileBuilder, ModelAdvisor
 from core.epistemic import CalibrationTracker, CostAwareRouter, MaxMode
+from core.changeset import ChangesetManager, safe_repo_path
 
 # Fable 5 leads the reasoning/creative expert profiles when its key is present
 for _profile_name in ("reasoning", "creative", "long_context"):
@@ -1901,11 +1902,24 @@ class WebSocketServer:
                     turn_logs = self.agent.logs[turn_start:]
                     tool_calls = [{"name": l["name"], "args": l.get("args", {})} for l in turn_logs if l.get("type") == "tool_call"]
                     routed = next((l for l in reversed(turn_logs) if l.get("type") == "auto_route"), None)
+                    changeset = self.agent.changesets.summary()
                     await websocket.send(json.dumps({
                         "type": "response", "content": result,
                         "toolCalls": tool_calls,
                         "routedTo": routed.get("provider") if routed else self.agent.provider,
+                        "changeset": changeset if changeset["files"] else None,
                     }))
+                elif msg_type == "file_write":
+                    p = safe_repo_path(data.get("path", ""))
+                    if not p:
+                        await websocket.send(json.dumps({"type":"notification", "content":"Invalid path (outside project)"}))
+                    else:
+                        try:
+                            p.parent.mkdir(parents=True, exist_ok=True)
+                            p.write_text(data.get("content", ""))
+                            await websocket.send(json.dumps({"type":"file_saved", "data":{"path": data.get("path", "")}}))
+                        except OSError as exc:
+                            await websocket.send(json.dumps({"type":"notification", "content":f"Save failed: {exc}"}))
                 elif msg_type == "command":
                     cmd = data["command"]
                     if cmd == "kanban":
@@ -2025,6 +2039,26 @@ class WebSocketServer:
                             await websocket.send(json.dumps({"type":"mcp_tools", "data":self.agent.mcp.list_tools(server_name)}))
                         except Exception as e:
                             await websocket.send(json.dumps({"type":"notification", "content":f"MCP error: {e}"}))
+                    elif cmd == "changeset:list":
+                        await websocket.send(json.dumps({"type":"changesets", "data":self.agent.changesets.list_turns()}))
+                    elif cmd.startswith("changeset:accept:"):
+                        _, _, cs_id, cs_path = cmd.split(":", 3)
+                        note = self.agent.changesets.accept(cs_id, cs_path)
+                        await websocket.send(json.dumps({"type":"changeset_update", "data":{"id": cs_id, "note": note, **self.agent.changesets.summary(cs_id)}}))
+                    elif cmd.startswith("changeset:reject:"):
+                        _, _, cs_id, cs_path = cmd.split(":", 3)
+                        note = self.agent.changesets.reject(cs_id, cs_path)
+                        await websocket.send(json.dumps({"type":"changeset_update", "data":{"id": cs_id, "note": note, **self.agent.changesets.summary(cs_id)}}))
+                    elif cmd.startswith("file:read:"):
+                        rel = cmd.split(":", 2)[2]
+                        p = safe_repo_path(rel)
+                        if p and p.is_file():
+                            try:
+                                await websocket.send(json.dumps({"type":"file_content", "data":{"path": rel, "content": p.read_text(errors="replace")[:1_000_000]}}))
+                            except OSError as exc:
+                                await websocket.send(json.dumps({"type":"notification", "content":f"Read failed: {exc}"}))
+                        else:
+                            await websocket.send(json.dumps({"type":"notification", "content":f"Not a readable project file: {rel}"}))
                     elif cmd == "cancel":
                         self.agent.cancel_event.set()
                         await websocket.send(json.dumps({"type":"notification", "content":"Cancelling current run..."}))
@@ -2264,6 +2298,8 @@ class UltimateAgent:
         self.doctor = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
         self.model_advisor = ModelAdvisor(provider_configs=PROVIDER_CONFIGS)
         self.profiler = ProfileBuilder(save_skill_fn=SelfLearner.save_skill, memory_store=self.context.store)
+        self.changesets = ChangesetManager()
+        self.changesets.attach(HookManager)
         self.tracker = CalibrationTracker(DB_FILE)
         self.router = CostAwareRouter(available_fn=_live_providers, tracker=self.tracker)
         def _candidates(prompt: str, n: int) -> Dict[str, str]:
@@ -2310,6 +2346,7 @@ class UltimateAgent:
         if not self.convo or self.convo[0].get("role") != "system":
             self.convo = [{"role": "system", "content": self.system_prompt}]
         self.cancel_event.clear()
+        self.changesets.begin_turn()
         self.convo.append({"role": "user", "content": _expand_mentions(user_text)})
         result = self.run_loop(self.convo, max_iters=max_iters)
         self.convo = self.messages  # run_loop grew self.messages with the full exchange
