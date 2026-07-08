@@ -11,10 +11,11 @@ import SessionPanel from "./components/Sessions/SessionPanel";
 import FileExplorer from "./components/Files/FileExplorer";
 import MindPanel from "./components/Mind/MindPanel";
 import OnboardingWizard from "./components/Mind/OnboardingWizard";
+import EditorPane from "./components/Editor/EditorPane";
 import { WsProvider, useWs } from "./hooks/useWebSocket";
 import { useStore } from "./store/session";
 
-type Tab = "chat" | "mind" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
+type Tab = "chat" | "editor" | "mind" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
 
 function ConnectionBar() {
   const { connected, connecting } = useWs();
@@ -183,6 +184,7 @@ function AppContent() {
 
   const tabs: { id: Tab; label: string; short: string }[] = [
     { id: "chat", label: "Chat", short: "CH" },
+    { id: "editor", label: "Editor", short: "ED" },
     { id: "mind", label: "Mind", short: "MI" },
     { id: "kanban", label: "Kanban", short: "KB" },
     { id: "agents", label: "Dashboard", short: "DB" },
@@ -238,6 +240,7 @@ function AppContent() {
         </nav>
         <main style={styles.main}>
           {activeTab === "chat" && <ChatView />}
+          {activeTab === "editor" && <EditorPane />}
           {activeTab === "mind" && <MindPanel />}
           {activeTab === "kanban" && <KanbanBoard />}
           {activeTab === "agents" && <AgentDashboard />}

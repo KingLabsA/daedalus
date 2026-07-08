@@ -5,6 +5,12 @@ export interface Message {
   timestamp: Date;
   toolCalls?: { name: string; args: Record<string, string> }[];
   routedTo?: string;
+  changeset?: ChangesetSummary;
+}
+
+export interface ChangesetSummary {
+  id: string;
+  files: { path: string; tool?: string; status: string; diff: string }[];
 }
 
 export interface KanbanTask {

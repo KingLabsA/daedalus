@@ -5,6 +5,7 @@ import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useStore } from "../../store/session";
 import { useAgent } from "../../hooks/useAgent";
 import { useWs } from "../../hooks/useWebSocket";
+import ChangesetReview from "./ChangesetReview";
 
 const SLASH_COMMANDS: Record<string, string> = {
   "/help": "Show this help",
@@ -183,6 +184,7 @@ export default function ChatView() {
                 {tc.name}({JSON.stringify(tc.args)})
               </div>
             ))}
+            {m.changeset && <ChangesetReview changeset={m.changeset} />}
             {m.routedTo && (
               <div style={{ fontSize: 10, color: "#7c7cff", marginTop: 4, opacity: 0.75 }}>
                 routed → {m.routedTo}

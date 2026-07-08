@@ -8,6 +8,7 @@ const WS_URL = `ws://127.0.0.1:8765${WS_TOKEN ? `/?token=${WS_TOKEN}` : ""}`;
 export interface WsContextValue {
   send: (text: string) => void;
   sendCommand: (cmd: string) => void;
+  sendRaw: (msg: Record<string, unknown>) => void;
   switchProvider: (p: string) => void;
   switchModel: (m: string) => void;
   switchSafety: (m: "suggest" | "plan" | "auto") => void;
@@ -120,6 +121,7 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
                 timestamp: new Date(),
                 toolCalls: data.toolCalls,
                 routedTo: data.routedTo,
+                changeset: data.changeset || undefined,
               });
               st.setStreamingContent("");
               st.setStreamingMessageId(null);
@@ -132,6 +134,7 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
                 timestamp: new Date(),
                 toolCalls: data.toolCalls,
                 routedTo: data.routedTo,
+                changeset: data.changeset || undefined,
               });
             }
             break;
@@ -246,6 +249,12 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
     ws.send(JSON.stringify({ type: "command", command: cmd }));
   }, []);
 
+  const sendRaw = useCallback((msg: Record<string, unknown>) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify(msg));
+  }, []);
+
   const switchProvider = useCallback((p: string) => {
     sendCommand(`provider:${p}`);
   }, [sendCommand]);
@@ -271,7 +280,7 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <WsContext.Provider value={{ send, sendCommand, switchProvider, switchModel, switchSafety, command, connected, connecting, subscribe }}>
+    <WsContext.Provider value={{ send, sendCommand, sendRaw, switchProvider, switchModel, switchSafety, command, connected, connecting, subscribe }}>
       {children}
     </WsContext.Provider>
   );
