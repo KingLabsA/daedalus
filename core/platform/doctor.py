@@ -18,6 +18,8 @@ BINARIES = [
     ("ffmpeg", "video analysis (frame extraction), audio fallback", "brew install ffmpeg"),
     ("sox", "microphone recording for /listen voice input", "brew install sox"),
     ("pyright", "deep type-aware code diagnostics", "npm install -g pyright"),
+    ("pyright-langserver", "LSP go-to-definition/usages/live diagnostics for Python", "npm install -g pyright"),
+    ("typescript-language-server", "LSP go-to-definition/usages for TS/JS", "npm install -g typescript-language-server typescript"),
     ("tsc", "TypeScript diagnostics", "npm install -g typescript"),
     ("afplay", "text-to-speech playback (macOS builtin)", "(macOS builtin)"),
     ("rg", "fast code search fallback", "brew install ripgrep"),

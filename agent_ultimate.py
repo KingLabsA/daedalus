@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from core.context import ContextEngine
 from core.cognition import EventLog, Dreamer, Distiller, GoalJudge, Subconscious
-from core.intel import CodeIntel, SemanticIndex, CausalWorldModel, WorldModelSentinel
+from core.intel import CodeIntel, SemanticIndex, CausalWorldModel, WorldModelSentinel, LspClient, EmbeddingIndex, HybridSearch
 from core.senses import ModelOrchestra, Vision, VoiceIO
 from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
 from core.platform import McpClient, DependencyScanner, ProfileBuilder, ModelAdvisor
@@ -2296,6 +2296,8 @@ class UltimateAgent:
         self.subconscious.start()
         self.code_intel = CodeIntel()
         self.sem_index = SemanticIndex()
+        self.lsp = LspClient()
+        self.search = HybridSearch(EmbeddingIndex(), self.sem_index)
         self.world_model = CausalWorldModel()
         self.wm_sentinel = WorldModelSentinel(self.world_model)
         self.wm_sentinel.attach(HookManager)
@@ -2547,9 +2549,19 @@ class UltimateAgent:
         @self.registry.register(description="Find all references to a symbol across the codebase")
         def find_references(name: str, max_results: str = "50") -> str:
             return json.dumps(self.code_intel.references(name, int(max_results)), indent=1)
-        @self.registry.register(description="Semantic (TF-IDF) code search — better than keyword grep for concepts")
+        @self.registry.register(description="Semantic code search (local embeddings when available, TF-IDF fallback) — better than grep for concepts")
         def semantic_search(query: str, k: str = "8") -> str:
-            return json.dumps(self.sem_index.search(query, int(k)), indent=1)
+            hits = self.search.search(query, int(k))
+            return json.dumps({"mode": self.search.mode(), "hits": hits}, indent=1)
+        @self.registry.register(description="LSP go-to-definition: exact definition location for the symbol at file:line:character (1-based)")
+        def goto_definition(filepath: str, line: str, character: str) -> str:
+            return json.dumps(self.lsp.definition(filepath, int(line), int(character)), indent=1)
+        @self.registry.register(description="LSP find-usages: all references to the symbol at file:line:character (1-based)")
+        def find_usages(filepath: str, line: str, character: str) -> str:
+            return json.dumps(self.lsp.references(filepath, int(line), int(character)), indent=1)
+        @self.registry.register(description="Live LSP diagnostics for a file (type errors, unused vars) — deeper than syntax check")
+        def live_diagnostics(filepath: str) -> str:
+            return json.dumps(self.lsp.diagnostics(filepath), indent=1)
         @self.registry.register(description="Build/refresh the causal world model from git history and imports")
         def build_world_model() -> str:
             return json.dumps(self.world_model.build(), indent=1)
