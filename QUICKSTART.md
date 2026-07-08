@@ -3,9 +3,11 @@
 ## Install (once)
 
 ```bash
-git clone <this-repo> && cd supercoding   # or wherever it lives
-./install.sh                              # installs the global `hermes` command
+pip install hermes-ultimate      # https://pypi.org/project/hermes-ultimate/
+# optional extras: pip install "hermes-ultimate[browser,desktop]"
 ```
+
+From source instead: `git clone <this-repo> && ./install.sh`
 
 ## Run
 

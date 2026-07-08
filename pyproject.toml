@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hermes-ultimate"
 version = "1.6.0"
+readme = "README.md"
 description = "Self-evolving multimodal coding assistant: persistent memory, failure immunity, sleep-time compute, causal world model, MoE expert routing, calibrated confidence, MCP client, and 22 LLM providers"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,7 +13,6 @@ dependencies = [
     "anthropic>=0.30",
     "python-dotenv>=1.0",
     "websockets>=12.0",
-    "playwright>=1.40",
     "requests>=2.31",
     "rich>=13.0",
 ]
@@ -35,6 +35,9 @@ dev = [
 desktop = [
     "pyautogui>=0.9",
     "pillow>=10.0",
+]
+browser = [
+    "playwright>=1.40",
 ]
 
 [tool.pytest.ini_options]

@@ -16,6 +16,8 @@ A self-evolving, multimodal coding assistant built on an autonomous agent core. 
 
 Plus the original core: self-learning, kanban multi-agent orchestration, plugin marketplace, Docker sandboxing, safety modes, git checkpoints, lifecycle hooks, and a desktop app (React + Tauri 2) with a **Mind** dashboard.
 
+**Install:** `pip install hermes-ultimate` → run `hermes` (terminal UI) or `hermes web` (browser IDE). [PyPI](https://pypi.org/project/hermes-ultimate/)
+
 See [CHANGELOG.md](CHANGELOG.md) for the full six-phase build.
 
 ## Quick Start
