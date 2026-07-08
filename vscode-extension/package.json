@@ -1,7 +1,7 @@
 {
-  "name": "hermes-vscode",
-  "displayName": "Hermes — Deep Mind Coding Assistant",
-  "description": "Chat with your local Hermes agent: streaming answers, native inline diffs for every agent edit, auto-routing across local models.",
+  "name": "daedalus-vscode",
+  "displayName": "Daedalus — powered by the Hermes Deep Mind engine",
+  "description": "Chat with your local Daedalus agent: streaming answers, native inline diffs for every agent edit, auto-routing across local models.",
   "version": "0.1.0",
   "publisher": "fableforge",
   "license": "MIT",
@@ -12,7 +12,7 @@
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "hermes", "title": "Hermes", "icon": "$(hubot)" }
+        { "id": "hermes", "title": "Daedalus", "icon": "$(hubot)" }
       ]
     },
     "views": {
@@ -21,18 +21,18 @@
       ]
     },
     "commands": [
-      { "command": "hermes.ask", "title": "Hermes: Ask" },
-      { "command": "hermes.askAboutFile", "title": "Hermes: Ask About Current File" },
-      { "command": "hermes.cancel", "title": "Hermes: Cancel Current Run" },
-      { "command": "hermes.reconnect", "title": "Hermes: Reconnect" }
+      { "command": "hermes.ask", "title": "Daedalus: Ask" },
+      { "command": "hermes.askAboutFile", "title": "Daedalus: Ask About Current File" },
+      { "command": "hermes.cancel", "title": "Daedalus: Cancel Current Run" },
+      { "command": "hermes.reconnect", "title": "Daedalus: Reconnect" }
     ],
     "configuration": {
-      "title": "Hermes",
+      "title": "Daedalus",
       "properties": {
         "hermes.host": {
           "type": "string",
           "default": "ws://127.0.0.1:8765",
-          "description": "Hermes agent WebSocket URL (start with: hermes ws)"
+          "description": "Daedalus agent WebSocket URL (start with: daedalus ws)"
         },
         "hermes.token": {
           "type": "string",

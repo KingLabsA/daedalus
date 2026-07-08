@@ -216,7 +216,7 @@ function AppContent() {
       <ConnectionBar />
       <div style={styles.body}>
         <nav style={{ ...styles.sidebar, background: cssVars.sidebarBg, borderRight: `1px solid ${cssVars.border}` }}>
-          <div style={styles.logo}>HU</div>
+          <div style={styles.logo}>DAE</div>
           <ThemeToggle />
           {tabs.map((t) => (
             <button

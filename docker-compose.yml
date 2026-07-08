@@ -1,0 +1,12 @@
+# Local dev / team-server: agent + web IDE. Bring your own .env with provider keys.
+services:
+  daedalus:
+    build: .
+    command: ["web", "--no-browser", "--port", "8899"]
+    ports: ["8765:8765", "8899:8899"]
+    volumes: [".:/workspace"]
+    env_file: [".env"]
+    environment:
+      - WS_HOST=0.0.0.0
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    extra_hosts: ["host.docker.internal:host-gateway"]

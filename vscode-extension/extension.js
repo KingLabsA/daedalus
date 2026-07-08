@@ -49,7 +49,7 @@ class HermesClient {
   }
   sendJson(obj) {
     if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(obj));
-    else vscode.window.showWarningMessage("Hermes agent not connected — run `hermes ws` first.");
+    else vscode.window.showWarningMessage("Daedalus agent not connected — run `daedalus ws` first.");
   }
   chat(text) { this.sendJson({ type: "chat", text }); }
   command(cmd) { this.sendJson({ type: "command", command: cmd }); }
@@ -79,13 +79,13 @@ async function showFileDiff(client, csId, relPath) {
   const ws = vscode.workspace.workspaceFolders?.[0];
   const fileUri = ws ? vscode.Uri.joinPath(ws.uri, relPath) : vscode.Uri.file(relPath);
   const origUri = vscode.Uri.parse(`hermes-orig:/${key}`);
-  vscode.commands.executeCommand("vscode.diff", origUri, fileUri, `Hermes: ${relPath} (${csId})`);
+  vscode.commands.executeCommand("vscode.diff", origUri, fileUri, `Daedalus: ${relPath} (${csId})`);
 }
 
 function reviewChangeset(client, changeset) {
   for (const f of changeset.files || []) {
     vscode.window
-      .showInformationMessage(`Hermes edited ${f.path}`, "Diff", "Accept", "Reject")
+      .showInformationMessage(`Daedalus edited ${f.path}`, "Diff", "Accept", "Reject")
       .then((choice) => {
         if (choice === "Diff") showFileDiff(client, changeset.id, f.path);
         else if (choice === "Accept") client.command(`changeset:accept:${changeset.id}:${f.path}`);
@@ -122,9 +122,9 @@ const CHAT_HTML = `<!DOCTYPE html><html><head><style>
   button { background: var(--vscode-button-background); color: var(--vscode-button-foreground);
     border: none; border-radius: 4px; padding: 4px 12px; cursor: pointer; }
 </style></head><body>
-  <div id="log"><div class="meta">Hermes — start the agent with <b>hermes ws</b>, then ask anything.</div></div>
+  <div id="log"><div class="meta">Daedalus — start the agent with <b>daedalus ws</b>, then ask anything.</div></div>
   <div id="row">
-    <textarea id="in" rows="2" placeholder="Ask Hermes… (Enter to send)"></textarea>
+    <textarea id="in" rows="2" placeholder="Ask Daedalus… (Enter to send)"></textarea>
     <button id="go">▶</button>
   </div>
 <script>
@@ -148,18 +148,18 @@ function activate(context) {
   const client = new HermesClient();
   const chat = new ChatViewProvider(client);
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
-  status.text = "$(hubot) Hermes: …";
+  status.text = "$(hubot) Daedalus: …";
   status.show();
 
   client.onMessage((m) => {
     if (m.type === "_status") {
-      status.text = m.connected ? "$(hubot) Hermes: on" : "$(hubot) Hermes: off";
+      status.text = m.connected ? "$(hubot) Daedalus: on" : "$(hubot) Daedalus: off";
       if (m.connected) chat.post({ type: "status", text: "connected" });
     } else if (m.type === "token") {
       chat.post({ type: "token", content: m.content });
     } else if (m.type === "response") {
       chat.post({ type: "response", content: m.content, routedTo: m.routedTo });
-      if (m.routedTo) status.text = `$(hubot) Hermes: ${m.routedTo}`;
+      if (m.routedTo) status.text = `$(hubot) Daedalus: ${m.routedTo}`;
       if (m.changeset) reviewChangeset(client, m.changeset);
     } else if (m.type === "changeset_old" && m.data) {
       const key = `${m.data.id}:${m.data.path}`;
@@ -180,14 +180,14 @@ function activate(context) {
     vscode.commands.registerCommand("hermes.reconnect", () => client.connect()),
     vscode.commands.registerCommand("hermes.cancel", () => client.command("cancel")),
     vscode.commands.registerCommand("hermes.ask", async () => {
-      const q = await vscode.window.showInputBox({ prompt: "Ask Hermes" });
+      const q = await vscode.window.showInputBox({ prompt: "Ask Daedalus" });
       if (q) { chat.post({ type: "status", text: "you ▸ " + q }); client.chat(q); }
     }),
     vscode.commands.registerCommand("hermes.askAboutFile", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor) return vscode.window.showWarningMessage("No active file.");
       const rel = vscode.workspace.asRelativePath(editor.document.uri);
-      const q = await vscode.window.showInputBox({ prompt: `Ask Hermes about ${rel}` });
+      const q = await vscode.window.showInputBox({ prompt: `Ask Daedalus about ${rel}` });
       if (q) { chat.post({ type: "status", text: `you ▸ (@${rel}) ` + q }); client.chat(`@${rel} ${q}`); }
     })
   );

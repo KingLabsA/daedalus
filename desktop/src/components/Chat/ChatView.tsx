@@ -134,9 +134,9 @@ export default function ChatView() {
         )}
         {messages.length === 0 && (
           <div style={styles.empty}>
-            <div style={styles.emptyIcon}>HU</div>
+            <div style={styles.emptyIcon}>DAE</div>
             <div style={{ fontWeight: 600, fontSize: 16, color: "#888" }}>
-              {connected ? "Ready" : "Hermes-Ultimate"}
+              {connected ? "Ready" : "Daedalus"}
             </div>
             <div style={{ fontSize: 13, color: "#555", marginTop: 4 }}>
               {connected ? 'Send a message or type /help' : 'Waiting for agent...'}

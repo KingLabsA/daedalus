@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""hermes — product launcher for Hermes Ultimate.
+"""daedalus — launcher for Daedalus (powered by the Hermes Deep Mind engine).
 
-  hermes            rich terminal UI (falls back to plain CLI without `rich`)
-  hermes web        web IDE: serves the built frontend + agent WS server, one process
-  hermes ws         headless agent WebSocket server
-  hermes doctor     scan this device for missing dependencies
-  hermes models     what models can this machine run
-  hermes version    print version
+  daedalus          rich terminal UI (falls back to plain CLI without `rich`)
+  daedalus web      web IDE: serves the built frontend + agent WS server, one process
+  daedalus ws       headless agent WebSocket server
+  daedalus doctor   scan this device for missing dependencies
+  daedalus models   what models can this machine run
+  daedalus version  print version
 """
 import argparse
 import json
@@ -22,7 +22,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.7.0"
+VERSION = "2.0.1"
 
 
 # ── helpers (unit-tested) ─────────────────────────────────────
@@ -39,7 +39,18 @@ def inject_token(html: str, token: str) -> str:
 
 
 def find_dist(root: Path = ROOT) -> Path:
-    return root / "desktop" / "dist"
+    """Repo build first (dev), then the pip-bundled hermes_webui package."""
+    repo_dist = root / "desktop" / "dist"
+    if (repo_dist / "index.html").is_file() or root != ROOT:
+        return repo_dist
+    try:
+        import hermes_webui
+        bundled = hermes_webui.dist_path()
+        if (bundled / "index.html").is_file():
+            return bundled
+    except ImportError:
+        pass
+    return repo_dist
 
 
 def dist_ready(root: Path = ROOT) -> bool:
@@ -108,7 +119,7 @@ def cmd_web(port: int, no_browser: bool = False):
     _SpaHandler.token = token
     httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
     url = f"http://127.0.0.1:{port}"
-    print(f"Hermes Web IDE  ->  {url}   (agent ws://127.0.0.1:8765, token-protected)")
+    print(f"Daedalus Web IDE  ->  {url}   (agent ws://127.0.0.1:8765, token-protected)")
     print("Ctrl-C to stop.")
     if not no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
@@ -172,7 +183,7 @@ def cmd_tui():
     stats = agent.context.stats()
     profile = agent.profiler.load() or {}
     console.print(Panel.fit(
-        f"[bold magenta]HERMES[/] [dim]v{VERSION} — Deep Mind[/]\n"
+        f"[bold magenta]DAEDALUS[/] [dim]v{VERSION} — Hermes Deep Mind engine[/]\n"
         f"provider [cyan]{agent.provider}[/] ({MODEL_NAME}) · auto-routing [green]on[/]\n"
         f"[dim]{stats['memories']} memories · {stats['failures']} antibodies · "
         f"{len(agent.registry.list_tools())} tools · persona: {profile.get('persona_label', '—')}[/]\n"
@@ -242,7 +253,7 @@ def cmd_ws():
     sys.path.insert(0, str(ROOT))
     import asyncio
     from agent_ultimate import UltimateAgent, run_ws_server, WS_HOST, WS_PORT
-    print(f"Hermes agent server on ws://{WS_HOST}:{WS_PORT}")
+    print(f"Daedalus agent server (Hermes engine) on ws://{WS_HOST}:{WS_PORT}")
     asyncio.run(run_ws_server(UltimateAgent()))
 
 
@@ -273,7 +284,7 @@ def cmd_models():
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="hermes", description="Hermes Ultimate — Deep Mind coding assistant")
+    parser = argparse.ArgumentParser(prog="daedalus", description="Daedalus — coding assistant powered by the Hermes Deep Mind engine")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("tui", help="rich terminal UI (default)")
     web = sub.add_parser("web", help="web IDE (serves frontend + agent)")
@@ -294,7 +305,7 @@ def main(argv=None):
     elif args.cmd == "models":
         cmd_models()
     elif args.cmd == "version":
-        print(f"hermes-ultimate {VERSION}")
+        print(f"daedalus {VERSION} (hermes engine)")
     else:
         cmd_tui()
 

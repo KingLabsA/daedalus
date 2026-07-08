@@ -1,6 +1,8 @@
-# Hermes Ultimate — Deep Mind Edition
+# Daedalus
 
-A self-evolving, multimodal coding assistant built on an autonomous agent core. 83 tools, 22 providers, and a cognitive stack no other assistant ships:
+**The self-evolving coding assistant, powered by the Hermes Deep Mind engine.**
+
+Daedalus is a multimodal coding assistant built on Hermes — the autonomous agent engine at its core. 83 tools, 22 providers, and a cognitive stack no other assistant ships:
 
 - **Persistent memory + context reconstruction** — remembers across sessions; rebuilds context from structured checkpoints instead of truncating ([spec](docs/superpowers/specs/2026-07-02-hermes-deep-mind-design.md))
 - **Failure Immune System** — every failure becomes an antibody; it cannot repeat a mistake it has already made
@@ -16,7 +18,7 @@ A self-evolving, multimodal coding assistant built on an autonomous agent core. 
 
 Plus the original core: self-learning, kanban multi-agent orchestration, plugin marketplace, Docker sandboxing, safety modes, git checkpoints, lifecycle hooks, and a desktop app (React + Tauri 2) with a **Mind** dashboard.
 
-**Install:** `pip install hermes-ultimate` → run `hermes` (terminal UI) or `hermes web` (browser IDE). [PyPI](https://pypi.org/project/hermes-ultimate/)
+**Install:** `pip install daedalus-ai` → run `daedalus` (terminal UI), `daedalus web` (browser IDE), or the [VS Code extension](vscode-extension/). [PyPI](https://pypi.org/project/daedalus-ai/)
 
 See [CHANGELOG.md](CHANGELOG.md) for the full six-phase build.
 

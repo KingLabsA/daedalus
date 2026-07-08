@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.0 — "Daedalus" (2026-07-09)
+
+**Rebrand**: the product is now **Daedalus** (the app across terminal, web, and
+VS Code); **Hermes** remains the name of the Deep Mind engine inside it.
+- PyPI package: `daedalus-ai` (was `hermes-ultimate`; bare 'daedalus' is PyPI-prohibited); CLI: `daedalus` / `dae`
+  (`hermes` kept as a legacy alias); VS Code extension: `daedalus-vscode`
+- Engine internals unchanged: `HERMES_*` env vars, `.hermes/` state, WS protocol
+  and command IDs are stable — no breaking changes for existing setups
+
 ## 1.4.0 — "Mentions & control" (2026-07-03)
 
 - **@file mentions**: `@path` in any message attaches that file's contents

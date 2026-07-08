@@ -12,7 +12,7 @@ const QUESTIONS: { key: string; label: string; placeholder: string; options?: st
   { key: "domains", label: "What domains will you work on most?", placeholder: "e.g. web apps, trading, research" },
   { key: "stack", label: "Main tools / languages?", placeholder: "e.g. python, react, excel, none" },
   { key: "experience", label: "Experience with AI assistants?", placeholder: "beginner / intermediate / expert", options: ["beginner", "intermediate", "expert"] },
-  { key: "goals", label: "What should Hermes help you achieve first?", placeholder: "e.g. ship my side project" },
+  { key: "goals", label: "What should Daedalus help you achieve first?", placeholder: "e.g. ship my side project" },
 ];
 
 export default function OnboardingWizard() {
@@ -68,9 +68,9 @@ export default function OnboardingWizard() {
         borderRadius: 16, padding: 32, display: "flex", flexDirection: "column", gap: 16,
       }}>
         <div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#e0e0e0" }}>Welcome to Hermes</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#e0e0e0" }}>Welcome to Daedalus</div>
           <div style={{ fontSize: 12, color: "#888", marginTop: 4 }}>
-            A few questions so Hermes can pre-build skills and adapt to you. ({step + 1}/{QUESTIONS.length})
+            A few questions so Daedalus can pre-build skills and adapt to you. ({step + 1}/{QUESTIONS.length})
           </div>
         </div>
 

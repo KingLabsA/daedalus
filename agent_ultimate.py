@@ -16,6 +16,7 @@ from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
 from core.platform import McpClient, DependencyScanner, ProfileBuilder, ModelAdvisor
 from core.epistemic import CalibrationTracker, CostAwareRouter, MaxMode
 from core.changeset import ChangesetManager, safe_repo_path
+from core.observability import Telemetry
 
 # Fable 5 leads the reasoning/creative expert profiles when its key is present
 for _profile_name in ("reasoning", "creative", "long_context"):
@@ -2080,6 +2081,10 @@ class WebSocketServer:
                         await websocket.send(json.dumps({"type":"calibration", "data":self.agent.tracker.report()}))
                     elif cmd.startswith("route:"):
                         await websocket.send(json.dumps({"type":"route", "data":self.agent.router.route(cmd.split(":", 1)[1])}))
+                    elif cmd == "metrics":
+                        data = self.agent.telemetry.metrics()
+                        data["slowest_tools"] = self.agent.telemetry.slowest_tools()
+                        await websocket.send(json.dumps({"type":"metrics", "data":data}))
                     elif cmd == "system_prompt":
                         await websocket.send(json.dumps({"type":"system_prompt", "data":self.agent.system_prompt}))
                     elif cmd.startswith("system_prompt:set:"):
@@ -2312,6 +2317,8 @@ class UltimateAgent:
         self.doctor = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
         self.model_advisor = ModelAdvisor(provider_configs=PROVIDER_CONFIGS)
         self.profiler = ProfileBuilder(save_skill_fn=SelfLearner.save_skill, memory_store=self.context.store)
+        self.telemetry = Telemetry()
+        self.telemetry.attach(HookManager)
         self.changesets = ChangesetManager()
         self.changesets.attach(HookManager)
         self.tracker = CalibrationTracker(DB_FILE)
@@ -2334,7 +2341,7 @@ class UltimateAgent:
         addendum = self.profiler.system_addendum()
         if addendum:
             persona_str = f"\n{addendum}"
-        self.system_prompt = f"You are Hermes-Ultimate, an autonomous coding assistant with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
+        self.system_prompt = f"You are Daedalus, an autonomous coding assistant powered by the Hermes Deep Mind engine with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
     def _preview_write(self, tool: str, args: dict) -> str:
         """Human-readable preview of a destructive tool call for approval."""
@@ -2628,6 +2635,11 @@ class UltimateAgent:
         @self.registry.register(description="Show the calibration report: predicted confidence vs actual outcomes")
         def calibration_report() -> str:
             return json.dumps(self.tracker.report(), indent=1)
+        @self.registry.register(description="Runtime metrics: LLM/tool latency, error rates, slowest tools, telemetry file")
+        def runtime_metrics() -> str:
+            data = self.telemetry.metrics()
+            data["slowest_tools"] = self.telemetry.slowest_tools()
+            return json.dumps(data, indent=1)
     def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
         if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
@@ -2740,7 +2752,7 @@ class UltimateAgent:
         return "Max iterations reached."
     def first_launch_setup(self):
         """First-run onboarding: doctor scan, profile interview, model advisor."""
-        print("\n=== Welcome to Hermes! First-launch setup (press Enter to skip any question) ===\n")
+        print("\n=== Welcome to Daedalus! First-launch setup (press Enter to skip any question) ===\n")
         try:
             report = self.doctor.scan()
             print(self.doctor.summary(report))
@@ -2830,6 +2842,10 @@ class UltimateAgent:
             prompt_text = u.split(" ", 1)[1] if " " in u else ""
             return json.dumps(self.router.route(prompt_text), indent=1) if prompt_text else "Usage: /route <prompt>"
         if u == "/calibration": return json.dumps(self.tracker.report(), indent=1)
+        if u == "/metrics":
+            data = self.telemetry.metrics()
+            data["slowest_tools"] = self.telemetry.slowest_tools()
+            return json.dumps(data, indent=1)
         if u == "/doctor":
             report = self.doctor.scan()
             return self.doctor.summary(report) + "\n\n" + self.doctor.fix_script(report)
@@ -2904,7 +2920,7 @@ class UltimateAgent:
         sid = self.session_id
         if not self.profiler.exists() and sys.stdin.isatty():
             self.first_launch_setup()
-        print(f"Hermes-Ultimate | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
+        print(f"Daedalus | Session: {sid} | Provider: {self.provider} ({MODEL_NAME})")
         print(f"Available providers: {', '.join(PROVIDER_CONFIGS.keys())}")
         print(f"Safety mode: {self.safety.mode}")
         print(f"Commands: {self.COMMANDS_HELP}\n")

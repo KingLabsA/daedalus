@@ -3,10 +3,10 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hermes-ultimate"
-version = "1.7.0"
+name = "daedalus-ai"
+version = "2.0.1"
 readme = "README.md"
-description = "Self-evolving multimodal coding assistant: persistent memory, failure immunity, sleep-time compute, causal world model, MoE expert routing, calibrated confidence, MCP client, and 22 LLM providers"
+description = "Daedalus — self-evolving multimodal coding assistant powered by the Hermes Deep Mind engine: persistent memory, failure immunity, sleep-time compute, causal world model, MoE expert routing, calibrated confidence, MCP client, and 22 LLM providers"
 requires-python = ">=3.10"
 dependencies = [
     "openai>=1.0",
@@ -18,13 +18,18 @@ dependencies = [
 ]
 
 [project.scripts]
+daedalus = "hermes_cli:main"
+dae = "hermes_cli:main"
 hermes = "hermes_cli:main"
 
 [tool.setuptools]
 py-modules = ["agent_ultimate", "hermes_cli"]
 
 [tool.setuptools.packages.find]
-include = ["core*"]
+include = ["core*", "hermes_webui*"]
+
+[tool.setuptools.package-data]
+hermes_webui = ["**/*"]
 
 [project.optional-dependencies]
 dev = [
