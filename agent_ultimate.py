@@ -694,24 +694,28 @@ def lint_and_test(path: str = ".") -> str:
     if py_files or (p / "pyproject.toml").exists():
         try:
             ruff = subprocess.run(["ruff", "check", str(p)], capture_output=True, text=True, timeout=30)
-            results.append(f"ruff: {"PASS" if ruff.returncode == 0 else "FAIL"}\n{ruff.stdout.strip()[:500]}")
+            ruff_status = "PASS" if ruff.returncode == 0 else "FAIL"
+            results.append(f"ruff: {ruff_status}\n{ruff.stdout.strip()[:500]}")
         except FileNotFoundError:
             results.append("ruff: NOT INSTALLED")
         try:
             pytest_r = subprocess.run(["python", "-m", "pytest", str(p), "-x", "-q"], capture_output=True, text=True, timeout=60)
-            results.append(f"pytest: {"PASS" if pytest_r.returncode == 0 else "FAIL"}\n{pytest_r.stdout.strip()[:500]}")
+            pytest_status = "PASS" if pytest_r.returncode == 0 else "FAIL"
+            results.append(f"pytest: {pytest_status}\n{pytest_r.stdout.strip()[:500]}")
         except Exception as e:
             results.append(f"pytest: ERROR {e}")
     js_files = list(p.rglob("*.ts")) + list(p.rglob("*.tsx")) + list(p.rglob("*.js"))
     if js_files and (p / "package.json").exists():
         try:
             eslint = subprocess.run(["npx", "eslint", str(p)], capture_output=True, text=True, timeout=30)
-            results.append(f"eslint: {"PASS" if eslint.returncode == 0 else "FAIL"}\n{eslint.stdout.strip()[:500]}")
+            eslint_status = "PASS" if eslint.returncode == 0 else "FAIL"
+            results.append(f"eslint: {eslint_status}\n{eslint.stdout.strip()[:500]}")
         except Exception:
             results.append("eslint: NOT AVAILABLE")
         try:
             npm_test = subprocess.run(["npm", "test"], capture_output=True, text=True, timeout=60, cwd=str(p))
-            results.append(f"npm test: {"PASS" if npm_test.returncode == 0 else "FAIL"}\n{npm_test.stdout.strip()[:500]}")
+            npm_test_status = "PASS" if npm_test.returncode == 0 else "FAIL"
+            results.append(f"npm test: {npm_test_status}\n{npm_test.stdout.strip()[:500]}")
         except Exception:
             results.append("npm test: NOT AVAILABLE")
     return "\n\n".join(results) if results else f"No lint/test config found at {path}"
@@ -726,7 +730,7 @@ def task_board(action: str = "list", task_name: str = "", column: str = "") -> s
         return f"Added task: {task.id} - {task.title}"
     elif action == "move" and task_name:
         board.move_task(task_name, column or "done")
-        return f"Moved task {task_name} to {column or "done"}"
+        return f"Moved task {task_name} to {column or 'done'}"
     elif action == "remove" and task_name:
         board.remove_task(task_name)
         return f"Removed task: {task_name}"
