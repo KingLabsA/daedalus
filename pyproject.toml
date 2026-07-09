@@ -17,6 +17,11 @@ dependencies = [
     "rich>=13.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/KingLabsA/daedalus"
+Repository = "https://github.com/KingLabsA/daedalus"
+Changelog = "https://github.com/KingLabsA/daedalus/blob/main/CHANGELOG.md"
+
 [project.scripts]
 daedalus = "hermes_cli:main"
 dae = "hermes_cli:main"

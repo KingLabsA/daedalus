@@ -1,30 +1,56 @@
 {
   "name": "daedalus-vscode",
-  "displayName": "Daedalus — powered by the Hermes Deep Mind engine",
+  "displayName": "Daedalus \u2014 powered by the Hermes Deep Mind engine",
   "description": "Chat with your local Daedalus agent: streaming answers, native inline diffs for every agent edit, auto-routing across local models.",
   "version": "0.1.0",
   "publisher": "fableforge",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["AI", "Chat", "Programming Languages"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
   "main": "./extension.js",
   "activationEvents": [],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "hermes", "title": "Daedalus", "icon": "$(hubot)" }
+        {
+          "id": "hermes",
+          "title": "Daedalus",
+          "icon": "$(hubot)"
+        }
       ]
     },
     "views": {
       "hermes": [
-        { "type": "webview", "id": "hermes.chat", "name": "Chat" }
+        {
+          "type": "webview",
+          "id": "hermes.chat",
+          "name": "Chat"
+        }
       ]
     },
     "commands": [
-      { "command": "hermes.ask", "title": "Daedalus: Ask" },
-      { "command": "hermes.askAboutFile", "title": "Daedalus: Ask About Current File" },
-      { "command": "hermes.cancel", "title": "Daedalus: Cancel Current Run" },
-      { "command": "hermes.reconnect", "title": "Daedalus: Reconnect" }
+      {
+        "command": "hermes.ask",
+        "title": "Daedalus: Ask"
+      },
+      {
+        "command": "hermes.askAboutFile",
+        "title": "Daedalus: Ask About Current File"
+      },
+      {
+        "command": "hermes.cancel",
+        "title": "Daedalus: Cancel Current Run"
+      },
+      {
+        "command": "hermes.reconnect",
+        "title": "Daedalus: Reconnect"
+      }
     ],
     "configuration": {
       "title": "Daedalus",
@@ -44,5 +70,9 @@
   },
   "dependencies": {
     "ws": "^8.17.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KingLabsA/daedalus.git"
   }
 }

@@ -7,7 +7,7 @@ pip install daedalus-ai          # https://pypi.org/project/daedalus-ai/
 # optional extras: pip install "daedalus-ai[browser,desktop]"
 ```
 
-From source instead: `git clone <this-repo> && ./install.sh`
+From source instead: `git clone https://github.com/KingLabsA/daedalus.git supercoding && cd supercoding && ./install.sh`
 
 ## Run
 
