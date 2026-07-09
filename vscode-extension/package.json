@@ -3,7 +3,7 @@
   "displayName": "Daedalus \u2014 powered by the Hermes Deep Mind engine",
   "description": "Chat with your local Daedalus agent: streaming answers, native inline diffs for every agent edit, auto-routing across local models.",
   "version": "0.1.0",
-  "publisher": "fableforge",
+  "publisher": "kinglabs",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
