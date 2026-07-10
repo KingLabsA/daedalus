@@ -208,9 +208,8 @@ def test_plugin_discover_local(tmp_path):
     agent_ultimate.PLUGINS_DIR = old
 
 def test_plugin_remote_list():
-    plugins = PluginMarketplace.list_remote()
-    assert len(plugins) >= 4
-    assert any(p["name"] == "web-scraper" for p in plugins)
+    # No public registry yet: must return an honest empty list, not mock entries.
+    assert PluginMarketplace.list_remote() == []
 
 def test_skill_versions(tmp_path):
     old_skills = SKILLS_DIR
