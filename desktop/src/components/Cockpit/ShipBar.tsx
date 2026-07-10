@@ -34,6 +34,11 @@ export default function ShipBar() {
       </select>
       <input value={dir} onChange={(e) => setDir(e.target.value)} placeholder="project dir (.)"
         style={{ ...inp, width: 110 }} />
+      <button style={{ ...btn, borderColor: "#4a4a2f", color: "#ffcc66" }}
+        title="Run the eval gate (build/compile/tests/MCP handshake) before shipping"
+        onClick={() => sendCommand(`verify:${dir.trim()}`)}>
+        ✓ Verify
+      </button>
       <button style={{ ...btn, borderColor: "#2f6e4a", color: "#66dd99" }}
         onClick={() => sendCommand(`deploy:${target}:${dir.trim()}`)}>
         🚀 Deploy plan

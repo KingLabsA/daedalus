@@ -262,6 +262,18 @@ class WebSocketServer:
                         parts = cmd.split(":")
                         r = plan(parts[2] if len(parts) > 2 and parts[2] else ".", parts[1])
                         await websocket.send(json.dumps({"type":"notification", "content":"🚀 Deploy plan:\n" + json.dumps(r, indent=1)}))
+                    elif cmd.startswith("verify:"):
+                        from core.evalgate import gate
+                        target_dir = cmd.split(":", 1)[1] or "."
+                        await websocket.send(json.dumps({"type":"notification", "content":f"⏳ Verifying {target_dir} …"}))
+                        g = await asyncio.get_event_loop().run_in_executor(None, gate, target_dir)
+                        if not g.get("ok"):
+                            note = f"❌ {g.get('error')}"
+                        else:
+                            icon = "✅" if g["passed"] else "🚫"
+                            lines = [f"{'✓' if c['passed'] else '✗'} {c['name']}" for c in g.get("checks", [])]
+                            note = f"{icon} {g['verdict']}\n" + "\n".join(lines)
+                        await websocket.send(json.dumps({"type":"notification", "content":note}))
                     elif cmd == "mcp":
                         await websocket.send(json.dumps({"type":"mcp", "data":self.agent.mcp.status()}))
                     elif cmd == "calibration":
