@@ -839,11 +839,7 @@ workflow:
 ---
 Replace ALL concrete values with {{placeholders}}. Return ONLY markdown."""
         try:
-            client = _get_provider_client(provider)
-            cfg = PROVIDER_CONFIGS.get(provider, {})
-            model = cfg.get("default_model", "gpt-4o-mini")
-            resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], temperature=0.2)
-            skill_md = resp.choices[0].message.content
+            skill_md = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider).content
         except Exception as e:
             skill_md = f"---\nname: {cls._recording_name}\ndescription: {cls._recording_description}\n---\n{json.dumps(cls._action_log, indent=2)}"
         skill_path = SKILLS_DIR / f"{cls._recording_name}.md"
@@ -861,11 +857,7 @@ Replace ALL concrete values with {{placeholders}}. Return ONLY markdown."""
 Goal: {goal}
 Create a NEW composed workflow that chains these skills together, reusing their steps. Output SKILL.md format."""
         try:
-            client = _get_provider_client(provider)
-            cfg = PROVIDER_CONFIGS.get(provider, {})
-            model = cfg.get("default_model", "gpt-4o-mini")
-            resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], temperature=0.3)
-            workflow = resp.choices[0].message.content
+            workflow = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider).content
         except Exception as e: return f"Compose failed: {e}"
         path = SKILLS_DIR / f"composed_{int(time.time())}.md"
         path.write_text(workflow)
@@ -1356,11 +1348,7 @@ def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str 
     prompt = "Summarize this conversation concisely:\n" + "\n".join([f"{m['role']}: {str(m.get('content',''))[:200]}" for m in middle])
     try:
         p = provider or LLM_PROVIDER
-        cfg = PROVIDER_CONFIGS.get(p, {})
-        client = _get_provider_client(p)
-        model = cfg.get("default_model", "gpt-4o-mini")
-        resp = client.chat.completions.create(model=model, messages=[{"role":"user","content":prompt}], max_tokens=200)
-        summary = resp.choices[0].message.content
+        summary = ProviderRouter.call([{"role": "user", "content": prompt}], [], p).content
     except: summary = "[Conversation summarized]"
     compressed = messages[:3] + [{"role": "user", "content": f"[Summary]: {summary}"}] + recent
     if system_msg: compressed.insert(0, system_msg)
@@ -1402,12 +1390,11 @@ def _tts_call(text: str) -> bytes:
     return resp.content
 
 def _ctx_summarize(prompt: str) -> str:
-    """Cheap LLM call used by the ContextEngine for checkpoint summaries."""
-    cfg = PROVIDER_CONFIGS.get(LLM_PROVIDER, {})
-    client = _get_provider_client(LLM_PROVIDER)
-    model = cfg.get("default_model", "gpt-4o-mini")
-    resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], max_tokens=300)
-    return resp.choices[0].message.content or ""
+    """Cheap LLM call used by the ContextEngine/judge for summaries. MUST go
+    through ProviderRouter: raw OpenAI-compat clients bypass the native-Ollama
+    num_ctx cap and re-load local models at full Modelfile context (23 GB)."""
+    resp = ProviderRouter.call([{"role": "user", "content": prompt}], [], LLM_PROVIDER)
+    return resp.content or ""
 
 # ============== PLUGIN MARKETPLACE ==============
 class PluginMarketplace:
@@ -1486,7 +1473,11 @@ class UltimateAgent:
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
         self.indexer = CodebaseIndexer()
-        self.context = ContextEngine(db_path=DB_FILE, session_id=self.session_id, summarize_fn=_ctx_summarize)
+        # summarize_fn deliberately None: the on_stop checkpoint runs in the hot
+        # path (before the response is released) — an LLM summary there costs a
+        # full local-model call of latency per turn. Heuristic checkpoints are
+        # instant; the Subconscious/dream enriches memory later, off the clock.
+        self.context = ContextEngine(db_path=DB_FILE, session_id=self.session_id, summarize_fn=None)
         self.context.attach(HookManager)
         self.events = EventLog(DB_FILE, self.session_id)
         self.events.attach(HookManager)

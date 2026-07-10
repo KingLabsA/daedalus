@@ -165,6 +165,16 @@ def _ollama_native_call(cfg: dict, provider: str, model: str, messages, tools_sc
     return _ollama_response(data.get("message", {}))
 
 def _ollama_native_stream(cfg: dict, provider: str, model: str, messages, tools_schemas):
+    # Streaming + tools is unreliable on Ollama (<0.4.6 emits the tool call as
+    # raw text and stalls the stream mid-call). Tool-turns go non-streaming —
+    # every Ollama version then returns structured tool_calls — and the content
+    # is emitted as one chunk so the UI still updates.
+    if tools_schemas:
+        resp = _ollama_native_call(cfg, provider, model, messages, tools_schemas)
+        if resp.content:
+            yield resp.content, None, {}
+        yield "", resp, {}
+        return
     import requests as _rq
     host = cfg.get("base", "").rsplit("/v1", 1)[0]
     payload = _ollama_payload(messages, tools_schemas, model)
