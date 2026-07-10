@@ -105,3 +105,35 @@ def test_astro_and_svelte(tmp_path):
     assert (tmp_path / "a" / "src" / "pages" / "index.astro").exists()
     scaffold("sveltekit", "V", str(tmp_path / "v"))
     assert (tmp_path / "v" / "src" / "routes" / "+page.svelte").exists()
+
+
+def test_canonical_command_strings():
+    from core.scaffold import canonical_command
+    assert "create vite" in canonical_command("web", "My App")
+    assert "my-app" in canonical_command("web", "My App")
+    assert "create-next-app" in canonical_command("next", "x")
+    assert "create-expo-app" in canonical_command("ios", "x")
+    assert "t3-app" in canonical_command("t3", "x")
+    assert canonical_command("mcp", "x") == ""  # no canonical CLI for our mcp kind
+
+
+def test_official_prefers_cli_when_present():
+    from core.scaffold import official
+    r = official("web", "Demo", which=lambda c: "/usr/bin/" + c)
+    assert r["mode"] == "official" and "create vite" in r["command"]
+
+
+def test_official_falls_back_to_skeleton(tmp_path, monkeypatch):
+    from core.scaffold import official
+    monkeypatch.chdir(tmp_path)
+    r = official("web", "Demo", which=lambda c: None)  # no npm/npx
+    assert r["mode"] == "skeleton" and r["ok"]
+    assert (tmp_path / "demo" / "package.json").exists()
+    assert "create vite" in r["canonical_available_via"]
+
+
+def test_official_unknown_kind_skeleton(tmp_path, monkeypatch):
+    from core.scaffold import official
+    monkeypatch.chdir(tmp_path)
+    r = official("mcp", "M", which=lambda c: "/bin/" + c)  # mcp has no canonical
+    assert r["mode"] == "skeleton"

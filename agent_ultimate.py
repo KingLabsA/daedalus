@@ -1814,6 +1814,10 @@ class UltimateAgent:
         def scaffold_kinds() -> str:
             from core.scaffold import kinds
             return ", ".join(kinds())
+        @self.registry.register(description="Scaffold using the CANONICAL community generator (create-vite/next/t3/astro/expo) when installed, else the built-in skeleton. Returns the official command to run (via run_command) or the written files.")
+        def scaffold_official(kind: str, name: str) -> str:
+            from core.scaffold import official
+            return json.dumps(official(kind, name), indent=1)
         @self.registry.register(description="Plan a deploy: detect the project in a dir, write the provider config (fly.toml/vercel.json/eas.json), return exact deploy commands. target: vercel|netlify|fly|eas (blank lists options). verify=true blocks deploy unless the eval gate passes.")
         def deploy_plan(project_dir: str = ".", target: str = "", app: str = "", verify: str = "false") -> str:
             from core.deploy import plan

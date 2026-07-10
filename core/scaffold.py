@@ -278,6 +278,53 @@ RUN_HINT = {
 }
 
 
+# Canonical maintained generators — used when available so you get the real,
+# up-to-date community template instead of our built-in skeleton. {name}/{slug}
+# are filled in; all run non-interactively.
+CANONICAL: Dict[str, str] = {
+    "web": "npm create vite@latest {slug} -- --template react",
+    "react": "npm create vite@latest {slug} -- --template react",
+    "vue": "npm create vite@latest {slug} -- --template vue",
+    "svelte": "npm create vite@latest {slug} -- --template svelte",
+    "sveltekit": "npx sv create {slug} --template minimal --no-add-ons --types ts",
+    "astro": "npm create astro@latest {slug} -- --template minimal --no-install --no-git --yes",
+    "next": "npx create-next-app@latest {slug} --ts --eslint --app --no-tailwind --no-src-dir --use-npm --yes",
+    "t3": "npm create t3-app@latest {slug} -- --CI --noGit",
+    "saas": "npm create t3-app@latest {slug} -- --CI --noGit",
+    "mobile": "npx create-expo-app@latest {slug}",
+    "ios": "npx create-expo-app@latest {slug}",
+    "android": "npx create-expo-app@latest {slug}",
+    "expo": "npx create-expo-app@latest {slug}",
+    "shadcn": "npm create vite@latest {slug} -- --template react-ts",
+    "tailwind": "npm create vite@latest {slug} -- --template react",
+}
+
+
+def canonical_command(kind: str, name: str) -> str:
+    """The official community generator command for a stack (empty if none)."""
+    tmpl = CANONICAL.get((kind or "").lower(), "")
+    return tmpl.format(slug=_slug(name), name=name) if tmpl else ""
+
+
+def official(kind: str, name: str, which: Callable[[str], object] = None) -> Dict:
+    """Prefer the canonical CLI when its launcher is installed; else fall back
+    to the built-in skeleton. Returns {mode, ...}."""
+    import shutil
+    which = which or shutil.which
+    cmd = canonical_command(kind, name)
+    if cmd:
+        launcher = cmd.split()[0]  # npm or npx
+        if which(launcher):
+            return {"ok": True, "mode": "official", "kind": kind.lower(),
+                    "command": cmd, "dir": _slug(name),
+                    "note": f"Run the maintained generator: {cmd}"}
+    r = scaffold(kind, name)
+    r["mode"] = "skeleton"
+    if cmd:
+        r["canonical_available_via"] = cmd
+    return r
+
+
 def kinds() -> List[str]:
     return sorted(TEMPLATES)
 
