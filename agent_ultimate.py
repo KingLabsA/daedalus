@@ -1806,6 +1806,14 @@ class UltimateAgent:
         def show_profile() -> str:
             profile = self.profiler.load()
             return json.dumps(profile, indent=1) if profile else "No profile yet. Run /profile rebuild in the CLI."
+        @self.registry.register(description="Scaffold a runnable project skeleton (text-to-app). kind: web|api|saas|fullstack|cli|mobile|ios|android. Returns files created + the command to run it.")
+        def scaffold_app(kind: str, name: str, out_dir: str = "") -> str:
+            from core.scaffold import scaffold
+            return json.dumps(scaffold(kind, name, out_dir), indent=1)
+        @self.registry.register(description="List the available project scaffold kinds for scaffold_app")
+        def scaffold_kinds() -> str:
+            from core.scaffold import kinds
+            return ", ".join(kinds())
         @self.registry.register(description="Max Mode: generate N answers from different expert models, judge them, return the best")
         def max_mode(prompt: str, n: str = "3") -> str:
             return json.dumps(self.max_mode.run(prompt, int(n)), indent=1)
@@ -2022,6 +2030,15 @@ class UltimateAgent:
             prompt_text = u.split(" ", 1)[1] if " " in u else ""
             return json.dumps(self.router.route(prompt_text), indent=1) if prompt_text else "Usage: /route <prompt>"
         if u == "/calibration": return json.dumps(self.tracker.report(), indent=1)
+        if u.startswith("/ship"):
+            from core.scaffold import scaffold, kinds
+            parts = u.split()
+            if len(parts) < 3:
+                return f"Usage: /ship <kind> <name>  (kinds: {', '.join(kinds())})"
+            result = scaffold(parts[1], " ".join(parts[2:]))
+            if result.get("ok"):
+                return f"Scaffolded {result['kind']} in {result['dir']}/ ({len(result['files'])} files)\nRun: {result['run']}"
+            return result.get("error", "scaffold failed")
         if u == "/metrics":
             data = self.telemetry.metrics()
             data["slowest_tools"] = self.telemetry.slowest_tools()
