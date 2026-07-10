@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" width="120" alt="Daedalus"></p>
+
 # Daedalus
 
 **The self-evolving coding assistant, powered by the Hermes Deep Mind engine.**

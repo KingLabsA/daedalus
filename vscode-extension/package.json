@@ -2,7 +2,7 @@
   "name": "daedalus-vscode",
   "displayName": "Daedalus \u2014 powered by the Hermes Deep Mind engine",
   "description": "Chat with your local Daedalus agent: streaming answers, native inline diffs for every agent edit, auto-routing across local models.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "kinglabs",
   "license": "MIT",
   "engines": {
@@ -11,7 +11,8 @@
   "categories": [
     "AI",
     "Chat",
-    "Programming Languages"
+    "Programming Languages",
+    "Machine Learning"
   ],
   "main": "./extension.js",
   "activationEvents": [],
@@ -74,5 +75,22 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/KingLabsA/daedalus.git"
+  },
+  "icon": "icon.png",
+  "keywords": [
+    "ai",
+    "agent",
+    "copilot",
+    "local llm",
+    "ollama",
+    "coding assistant",
+    "chat",
+    "diff",
+    "daedalus",
+    "hermes"
+  ],
+  "galleryBanner": {
+    "color": "#16162a",
+    "theme": "dark"
   }
 }
