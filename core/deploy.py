@@ -107,11 +107,20 @@ def _needs_dockerfile(kind: str, p: Path) -> Optional[str]:
 # ── public API ────────────────────────────────────────────────────────────
 
 def plan(project_dir: str = ".", target: str = "", app: str = "",
-         which: Callable[[str], Optional[str]] = shutil.which, write: bool = True) -> Dict:
-    """Detect the project, write the provider config, and return the deploy plan."""
+         which: Callable[[str], Optional[str]] = shutil.which, write: bool = True,
+         verify: bool = False) -> Dict:
+    """Detect the project, write the provider config, and return the deploy plan.
+    When verify=True, run the eval gate first and refuse (blocked) if it fails."""
     p = Path(project_dir)
     if not p.exists():
         return {"ok": False, "error": f"No such directory: {project_dir}"}
+    if verify and target:
+        from .evalgate import gate
+        g = gate(project_dir)
+        if g.get("ok") and not g.get("passed"):
+            return {"ok": False, "blocked_by_eval": True, "target": target,
+                    "verdict": g["verdict"], "checks": g["checks"],
+                    "error": "Deploy blocked: verification failed. Fix the failing checks, then retry."}
     kind = detect(project_dir)
     app = app or p.resolve().name or "app"
     opts = targets(kind, app)
