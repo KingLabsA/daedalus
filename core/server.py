@@ -249,6 +249,19 @@ class WebSocketServer:
                     elif cmd == "cancel":
                         self.agent.cancel_event.set()
                         await websocket.send(json.dumps({"type":"notification", "content":"Cancelling current run..."}))
+                    elif cmd.startswith("scaffold:"):
+                        from core.scaffold import scaffold
+                        _, kind, sname = cmd.split(":", 2)
+                        r = scaffold(kind, sname)
+                        note = (f"✅ Scaffolded {r['kind']} in {r['dir']}/ ({len(r['files'])} files)\nRun: {r['run']}"
+                                if r.get("ok") else f"❌ {r.get('error')}")
+                        await websocket.send(json.dumps({"type":"notification", "content":note}))
+                        await websocket.send(json.dumps({"type":"command", "command":"files"}))
+                    elif cmd.startswith("deploy:"):
+                        from core.deploy import plan
+                        parts = cmd.split(":")
+                        r = plan(parts[2] if len(parts) > 2 and parts[2] else ".", parts[1])
+                        await websocket.send(json.dumps({"type":"notification", "content":"🚀 Deploy plan:\n" + json.dumps(r, indent=1)}))
                     elif cmd == "mcp":
                         await websocket.send(json.dumps({"type":"mcp", "data":self.agent.mcp.status()}))
                     elif cmd == "calibration":
