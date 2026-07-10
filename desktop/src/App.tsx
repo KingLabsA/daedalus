@@ -271,13 +271,14 @@ export default function App() {
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
-    display: "flex", flexDirection: "column", height: "100vh",
+    position: "fixed", inset: 0, width: "100vw", height: "100vh",
+    display: "flex", flexDirection: "column", overflow: "hidden",
     fontFamily: "'Inter', system-ui, sans-serif",
   },
-  body: { display: "flex", flex: 1, overflow: "hidden" },
+  body: { display: "flex", flex: 1, minHeight: 0, overflow: "hidden" },
   sidebar: {
-    width: 72, display: "flex", flexDirection: "column",
-    alignItems: "center", padding: "12px 0", gap: 4,
+    width: 72, flexShrink: 0, display: "flex", flexDirection: "column",
+    alignItems: "center", padding: "12px 0", gap: 4, overflowY: "auto",
   },
   logo: {
     fontSize: 16, fontWeight: 700, color: "#7c7cff", marginBottom: 8,
