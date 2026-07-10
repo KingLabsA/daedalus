@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "daedalus-ai"
-version = "2.0.1"
+version = "2.0.2"
 readme = "README.md"
 description = "Daedalus — self-evolving multimodal coding assistant powered by the Hermes Deep Mind engine: persistent memory, failure immunity, sleep-time compute, causal world model, MoE expert routing, calibrated confidence, MCP client, and 22 LLM providers"
 requires-python = ">=3.10"
