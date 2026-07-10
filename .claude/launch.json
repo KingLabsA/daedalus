@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "daedalus-web",
+      "runtimeExecutable": "python3.14",
+      "runtimeArgs": ["hermes_cli.py", "web", "--port", "8899", "--no-browser"],
+      "port": 8899
+    }
+  ]
+}

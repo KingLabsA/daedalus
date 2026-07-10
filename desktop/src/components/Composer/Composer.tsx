@@ -3,15 +3,7 @@ import { useStore } from "../../store/session";
 import { useAgent } from "../../hooks/useAgent";
 import { useWs } from "../../hooks/useWebSocket";
 
-const PROVIDER_MODELS: Record<string, string[]> = {
-  openai: ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
-  anthropic: ["claude-sonnet-4-20250514", "claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"],
-  openrouter: ["auto"],
-  ollama: ["llama3.2", "qwen2.5", "codellama"],
-  google: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
-  deepseek: ["deepseek-chat", "deepseek-coder"],
-  groq: ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
-};
+// model list comes live from the agent (WS `models` command) — no hardcoding
 
 const SAFETY_COLORS: Record<string, string> = {
   suggest: "#ffaa44",
@@ -30,6 +22,7 @@ export default function Composer() {
   const model = useStore((s) => s.model);
   const safetyMode = useStore((s) => s.safetyMode);
   const setModel = useStore((s) => s.setModel);
+  const modelList = useStore((s) => s.modelList);
 
   const handleRun = () => {
     if (!prompt.trim() || loading) return;
@@ -70,7 +63,7 @@ export default function Composer() {
             value={model}
             onChange={(e) => handleModelSwitch(e.target.value)}
           >
-            {PROVIDER_MODELS[provider]?.map((m) => (
+            {(modelList?.models?.length ? modelList.models : [model]).map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
           </select>

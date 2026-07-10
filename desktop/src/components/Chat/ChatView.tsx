@@ -117,7 +117,10 @@ export default function ChatView() {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button onClick={() => setShowHelp(!showHelp)} style={styles.smallBtn}>/</button>
           <span style={{ fontSize: 11, color: "#7c7cff" }}>
-            {useStore.getState().provider} / {useStore.getState().model}
+            {(() => {
+              const routed = [...messages].reverse().find((m) => m.routedTo)?.routedTo;
+              return routed ? `auto-route → ${routed}` : `${useStore.getState().provider} (auto-route)`;
+            })()}
           </span>
         </div>
       </div>

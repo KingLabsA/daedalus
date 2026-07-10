@@ -1439,12 +1439,8 @@ class PluginMarketplace:
 
     @staticmethod
     def list_remote() -> List[Dict]:
-        return [
-            {"name": "web-scraper", "version": "1.0.0", "description": "Advanced web scraping with CSS selectors", "author": "Hermes"},
-            {"name": "code-analyzer", "version": "1.1.0", "description": "Static analysis for Python, JS, Rust", "author": "Hermes"},
-            {"name": "docker-compose", "version": "0.9.0", "description": "Multi-container Docker orchestration", "author": "Community"},
-            {"name": "notion-sync", "version": "2.0.0", "description": "Sync agent memory with Notion", "author": "Community"},
-        ]
+        # No public registry yet — return the truth, not mock entries.
+        return []
 
     @staticmethod
     def get_skill_versions(name: str) -> List[Dict]:
