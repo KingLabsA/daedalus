@@ -125,6 +125,74 @@ def _openai_call_kwargs(cfg: dict) -> dict:
         kwargs["extra_body"] = {"options": {"num_ctx": int(os.getenv("HERMES_LOCAL_NUM_CTX", "8192"))}}
     return kwargs
 
+def _ollama_payload(messages: List[Dict], tools_schemas: List[Dict], model: str) -> Dict:
+    om = []
+    for m in messages:
+        role = m.get("role")
+        if role in ("system", "user", "assistant", "tool"):
+            om.append({"role": role, "content": str(m.get("content") or "")})
+    payload: Dict[str, Any] = {
+        "model": model, "messages": om,
+        "options": {"num_ctx": int(os.getenv("HERMES_LOCAL_NUM_CTX", "8192"))},
+    }
+    if tools_schemas:
+        payload["tools"] = tools_schemas
+    return payload
+
+def _ollama_response(msg: Dict):
+    tool_calls = []
+    for i, tc in enumerate(msg.get("tool_calls") or []):
+        fn = tc.get("function", {})
+        args = fn.get("arguments")
+        f_obj = type("F", (), {"name": fn.get("name", ""),
+                               "arguments": args if isinstance(args, str) else json.dumps(args or {})})()
+        tool_calls.append(type("TC", (), {"id": f"ollama_call_{i}", "function": f_obj})())
+    return type("Response", (), {"content": msg.get("content", "") or "", "tool_calls": tool_calls})()
+
+def _ollama_native_call(cfg: dict, provider: str, model: str, messages, tools_schemas):
+    """Ollama's OpenAI-compatible endpoint silently IGNORES options.num_ctx, so a
+    model whose Modelfile sets a huge context (e.g. 131k -> 23 GB) loads at full
+    size and swamps the machine. The native /api/chat honors it — use that."""
+    import requests as _rq
+    host = cfg.get("base", "").rsplit("/v1", 1)[0]
+    payload = _ollama_payload(messages, tools_schemas, model)
+    payload["stream"] = False
+    r = _rq.post(f"{host}/api/chat", json=payload,
+                 timeout=float(os.getenv("HERMES_LLM_TIMEOUT", "120")))
+    r.raise_for_status()
+    data = r.json()
+    _track_cost(provider, data.get("prompt_eval_count", 0), data.get("eval_count", 0))
+    return _ollama_response(data.get("message", {}))
+
+def _ollama_native_stream(cfg: dict, provider: str, model: str, messages, tools_schemas):
+    import requests as _rq
+    host = cfg.get("base", "").rsplit("/v1", 1)[0]
+    payload = _ollama_payload(messages, tools_schemas, model)
+    payload["stream"] = True
+    r = _rq.post(f"{host}/api/chat", json=payload, stream=True,
+                 timeout=float(os.getenv("HERMES_LLM_TIMEOUT", "120")))
+    r.raise_for_status()
+    content_parts: List[str] = []
+    tool_calls: List[Dict] = []
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    for line in r.iter_lines():
+        if not line:
+            continue
+        chunk = json.loads(line)
+        msg = chunk.get("message", {})
+        piece = msg.get("content", "")
+        if piece:
+            content_parts.append(piece)
+            yield piece, None, {}
+        if msg.get("tool_calls"):
+            tool_calls.extend(msg["tool_calls"])
+        if chunk.get("done"):
+            usage = {"prompt_tokens": chunk.get("prompt_eval_count", 0),
+                     "completion_tokens": chunk.get("eval_count", 0)}
+    _track_cost(provider, usage["prompt_tokens"], usage["completion_tokens"])
+    final = _ollama_response({"content": "".join(content_parts), "tool_calls": tool_calls})
+    yield "", final, usage
+
 class ProviderRouter:
     @staticmethod
     def call(messages: List[Dict], tools_schemas: List[Dict], provider: str = None):
@@ -135,6 +203,9 @@ class ProviderRouter:
         model = _model_for(provider, cfg)
         api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
         base = cfg.get("base")
+
+        if cfg.get("ollama"):
+            return _ollama_native_call(cfg, provider, model, messages, tools_schemas)
 
         if cfg.get("lib") == "openai":
             import openai
@@ -219,6 +290,10 @@ class ProviderRouter:
         model = _model_for(provider, cfg)
         api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
         base = cfg.get("base")
+
+        if cfg.get("ollama"):
+            yield from _ollama_native_stream(cfg, provider, model, messages, tools_schemas)
+            return
 
         if cfg.get("lib") == "openai":
             import openai
