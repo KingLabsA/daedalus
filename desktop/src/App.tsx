@@ -9,13 +9,14 @@ import GitPanel from "./components/Git/GitPanel";
 import LspPanel from "./components/Lsp/LspPanel";
 import SessionPanel from "./components/Sessions/SessionPanel";
 import FileExplorer from "./components/Files/FileExplorer";
+import Cockpit from "./components/Cockpit/Cockpit";
 import MindPanel from "./components/Mind/MindPanel";
 import OnboardingWizard from "./components/Mind/OnboardingWizard";
 import EditorPane from "./components/Editor/EditorPane";
 import { WsProvider, useWs } from "./hooks/useWebSocket";
 import { useStore } from "./store/session";
 
-type Tab = "chat" | "editor" | "mind" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
+type Tab = "cockpit" | "chat" | "editor" | "mind" | "kanban" | "agents" | "composer" | "git" | "files" | "lsp" | "sessions" | "logs" | "settings";
 
 function ConnectionBar() {
   const { connected, connecting } = useWs();
@@ -168,7 +169,7 @@ const startupStyles: Record<string, React.CSSProperties> = {
 };
 
 function AppContent() {
-  const [activeTab, setActiveTab] = useState<Tab>("chat");
+  const [activeTab, setActiveTab] = useState<Tab>("cockpit");
   const { connected, subscribe } = useWs();
   const setLogs = useStore((s) => s.setLogs);
   const setDiff = useStore((s) => s.setDiff);
@@ -183,6 +184,7 @@ function AppContent() {
   }, [subscribe, setLogs, setDiff, setLsp]);
 
   const tabs: { id: Tab; label: string; short: string }[] = [
+    { id: "cockpit", label: "Cockpit", short: "CO" },
     { id: "chat", label: "Chat", short: "CH" },
     { id: "editor", label: "Editor", short: "ED" },
     { id: "mind", label: "Mind", short: "MI" },
@@ -239,6 +241,7 @@ function AppContent() {
           }} />
         </nav>
         <main style={styles.main}>
+          {activeTab === "cockpit" && <Cockpit />}
           {activeTab === "chat" && <ChatView />}
           {activeTab === "editor" && <EditorPane />}
           {activeTab === "mind" && <MindPanel />}
