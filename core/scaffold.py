@@ -105,6 +105,138 @@ def _expo(name: str) -> Dict[str, str]:
     }
 
 
+def _tailwind(name: str) -> Dict[str, str]:
+    """Vite + React + Tailwind — the modern UI baseline (shadcn-ready)."""
+    files = _vite_react(name)
+    pkg = json.loads(files["package.json"])
+    pkg["devDependencies"].update({"tailwindcss": "^3.4.10", "postcss": "^8.4.41", "autoprefixer": "^10.4.20"})
+    files["package.json"] = json.dumps(pkg, indent=2)
+    files["tailwind.config.js"] = ("export default {\n  content: ['./index.html', './src/**/*.{js,jsx}'],\n"
+                                    "  theme: { extend: {} },\n  plugins: [],\n}\n")
+    files["postcss.config.js"] = "export default { plugins: { tailwindcss: {}, autoprefixer: {} } }\n"
+    files["src/index.css"] = "@tailwind base;\n@tailwind components;\n@tailwind utilities;\n"
+    files["src/main.jsx"] = ("import React from 'react'\nimport { createRoot } from 'react-dom/client'\n"
+                             "import App from './App.jsx'\nimport './index.css'\n"
+                             "createRoot(document.getElementById('root')).render(<App />)\n")
+    files["src/App.jsx"] = (f"export default function App() {{\n  return (\n"
+                            f"    <main className='min-h-screen grid place-items-center bg-slate-950 text-slate-100'>\n"
+                            f"      <div className='text-center'>\n"
+                            f"        <h1 className='text-4xl font-bold'>{name}</h1>\n"
+                            f"        <p className='mt-2 text-slate-400'>Vite + React + Tailwind, scaffolded by Daedalus.</p>\n"
+                            f"      </div>\n    </main>\n  )\n}}\n")
+    files["README.md"] = f"# {name}\n\nVite + React + Tailwind (shadcn-ready).\n\n```bash\nnpm install\nnpm run dev   # http://localhost:5173\n```\n\nAdd components: `npx shadcn@latest init`\n"
+    return files
+
+
+def _supabase(name: str) -> Dict[str, str]:
+    """Vite + React + Supabase client — instant auth/DB/storage backend."""
+    files = _tailwind(name)
+    pkg = json.loads(files["package.json"])
+    pkg["dependencies"]["@supabase/supabase-js"] = "^2.45.0"
+    files["package.json"] = json.dumps(pkg, indent=2)
+    files["src/supabaseClient.js"] = ("import { createClient } from '@supabase/supabase-js'\n"
+        "export const supabase = createClient(\n  import.meta.env.VITE_SUPABASE_URL,\n"
+        "  import.meta.env.VITE_SUPABASE_ANON_KEY,\n)\n")
+    files[".env.example"] = "VITE_SUPABASE_URL=https://YOUR_PROJECT.supabase.co\nVITE_SUPABASE_ANON_KEY=YOUR_ANON_KEY\n"
+    files["README.md"] = f"# {name} (Supabase)\n\n```bash\nnpm install\ncp .env.example .env   # fill from your Supabase project settings\nnpm run dev\n```\n"
+    return files
+
+
+def _astro(name: str) -> Dict[str, str]:
+    slug = _slug(name)
+    return {
+        "package.json": json.dumps({"name": slug, "type": "module", "version": "0.1.0",
+            "scripts": {"dev": "astro dev", "build": "astro build", "preview": "astro preview"},
+            "dependencies": {"astro": "^4.15.0"}}, indent=2),
+        "astro.config.mjs": "import { defineConfig } from 'astro/config'\nexport default defineConfig({})\n",
+        "src/pages/index.astro": f"---\nconst title = '{name}'\n---\n<html><head><title>{{title}}</title></head>\n"
+                                 f"<body style='font-family:system-ui;padding:40px'><h1>{{title}}</h1>\n"
+                                 f"<p>Astro site scaffolded by Daedalus.</p></body></html>\n",
+        "README.md": f"# {name} (Astro)\n\n```bash\nnpm install\nnpm run dev   # http://localhost:4321\n```\n",
+    }
+
+
+def _svelte(name: str) -> Dict[str, str]:
+    slug = _slug(name)
+    return {
+        "package.json": json.dumps({"name": slug, "type": "module", "version": "0.1.0",
+            "scripts": {"dev": "vite dev", "build": "vite build", "preview": "vite preview"},
+            "devDependencies": {"@sveltejs/kit": "^2.5.0", "@sveltejs/adapter-auto": "^3.2.0",
+                                "svelte": "^4.2.0", "vite": "^5.4.0"}}, indent=2),
+        "svelte.config.js": "import adapter from '@sveltejs/adapter-auto'\nexport default { kit: { adapter: adapter() } }\n",
+        "vite.config.js": "import { sveltekit } from '@sveltejs/kit/vite'\nexport default { plugins: [sveltekit()] }\n",
+        "src/routes/+page.svelte": f"<h1>{name}</h1>\n<p>SvelteKit app scaffolded by Daedalus.</p>\n",
+        "src/app.html": "<!doctype html><html><head>%sveltekit.head%</head><body>%sveltekit.body%</body></html>\n",
+        "README.md": f"# {name} (SvelteKit)\n\n```bash\nnpm install\nnpm run dev   # http://localhost:5173\n```\n",
+    }
+
+
+def _mcp_server(name: str) -> Dict[str, str]:
+    """Agent-authored MCP server — Daedalus extends its own toolset. Real stdio
+    JSON-RPC server matching the McpClient protocol; register in .hermes/mcp.json."""
+    slug = _slug(name)
+    return {
+        "server.py": f'''#!/usr/bin/env python3
+"""{name} — an MCP (Model Context Protocol) server. Add tools in TOOLS below;
+register it in .hermes/mcp.json and Daedalus can call them.
+"""
+import json
+import sys
+
+TOOLS = [
+    {{"name": "ping", "description": "Health check", "inputSchema": {{"type": "object", "properties": {{}}}}}},
+    {{"name": "echo", "description": "Echo a message",
+      "inputSchema": {{"type": "object", "properties": {{"text": {{"type": "string"}}}}, "required": ["text"]}}}},
+]
+
+
+def handle(name, args):
+    if name == "ping":
+        return "pong"
+    if name == "echo":
+        return args.get("text", "")
+    raise ValueError(f"unknown tool: {{name}}")
+
+
+def send(msg):
+    sys.stdout.write(json.dumps(msg) + "\\n")
+    sys.stdout.flush()
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        req = json.loads(line)
+        mid, method, params = req.get("id"), req.get("method"), req.get("params", {{}})
+        if method == "initialize":
+            send({{"jsonrpc": "2.0", "id": mid, "result": {{"protocolVersion": "2024-11-05",
+                  "serverInfo": {{"name": "{slug}", "version": "0.1.0"}}, "capabilities": {{"tools": {{}}}}}}}})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/list":
+            send({{"jsonrpc": "2.0", "id": mid, "result": {{"tools": TOOLS}}}})
+        elif method == "tools/call":
+            try:
+                out = handle(params.get("name"), params.get("arguments", {{}}))
+                send({{"jsonrpc": "2.0", "id": mid, "result": {{"content": [{{"type": "text", "text": str(out)}}]}}}})
+            except Exception as exc:
+                send({{"jsonrpc": "2.0", "id": mid, "result": {{"content": [{{"type": "text", "text": str(exc)}}], "isError": True}}}})
+        elif mid is not None:
+            send({{"jsonrpc": "2.0", "id": mid, "result": {{}}}})
+
+
+if __name__ == "__main__":
+    main()
+''',
+        ".hermes/mcp.json": json.dumps({"servers": {slug: {"command": "python3", "args": ["server.py"], "env": {}}}}, indent=2),
+        "README.md": f"# {name} — MCP server\n\nAdd tools in `TOOLS` + `handle()` in server.py.\n\n"
+                     f"```bash\n# register (already written to .hermes/mcp.json), then in Daedalus:\n"
+                     f"/mcp tools {slug}\n/mcp call {slug}/ping\n```\n",
+    }
+
+
 TEMPLATES: Dict[str, Callable[[str], Dict[str, str]]] = {
     "web": _vite_react,
     "react": _vite_react,
@@ -116,6 +248,13 @@ TEMPLATES: Dict[str, Callable[[str], Dict[str, str]]] = {
     "ios": _expo,
     "android": _expo,
     "expo": _expo,
+    "tailwind": _tailwind,
+    "shadcn": _tailwind,
+    "supabase": _supabase,
+    "astro": _astro,
+    "svelte": _svelte,
+    "sveltekit": _svelte,
+    "mcp": _mcp_server,
 }
 
 RUN_HINT = {
@@ -129,6 +268,13 @@ RUN_HINT = {
     "ios": "cd {dir} && npm install && npx expo start --ios",
     "android": "cd {dir} && npm install && npx expo start --android",
     "expo": "cd {dir} && npm install && npx expo start",
+    "tailwind": "cd {dir} && npm install && npm run dev",
+    "shadcn": "cd {dir} && npm install && npm run dev",
+    "supabase": "cd {dir} && npm install && cp .env.example .env && npm run dev",
+    "astro": "cd {dir} && npm install && npm run dev",
+    "svelte": "cd {dir} && npm install && npm run dev",
+    "sveltekit": "cd {dir} && npm install && npm run dev",
+    "mcp": "cd {dir} && python3 server.py   # then /mcp tools {slug} in Daedalus",
 }
 
 
