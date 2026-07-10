@@ -73,3 +73,35 @@ def test_default_dir_from_name(tmp_path, monkeypatch):
     r = scaffold("web", "Auto Named")
     assert r["dir"] == "auto-named"
     assert (tmp_path / "auto-named" / "index.html").exists()
+
+
+def test_new_template_kinds_present():
+    for k in ("tailwind", "shadcn", "supabase", "astro", "svelte", "mcp"):
+        assert k in kinds()
+
+
+def test_tailwind_has_config(tmp_path):
+    scaffold("tailwind", "T", str(tmp_path))
+    assert (tmp_path / "tailwind.config.js").exists()
+    assert "@tailwind base" in (tmp_path / "src" / "index.css").read_text()
+
+
+def test_supabase_client(tmp_path):
+    scaffold("supabase", "S", str(tmp_path))
+    assert "createClient" in (tmp_path / "src" / "supabaseClient.js").read_text()
+    assert (tmp_path / ".env.example").exists()
+
+
+def test_mcp_server_scaffold(tmp_path):
+    r = scaffold("mcp", "Tools", str(tmp_path))
+    assert r["ok"]
+    assert "tools/call" in (tmp_path / "server.py").read_text()
+    cfg = json.loads((tmp_path / ".hermes" / "mcp.json").read_text())
+    assert "tools" in cfg["servers"]  # slug of "Tools"
+
+
+def test_astro_and_svelte(tmp_path):
+    scaffold("astro", "A", str(tmp_path / "a"))
+    assert (tmp_path / "a" / "src" / "pages" / "index.astro").exists()
+    scaffold("sveltekit", "V", str(tmp_path / "v"))
+    assert (tmp_path / "v" / "src" / "routes" / "+page.svelte").exists()
