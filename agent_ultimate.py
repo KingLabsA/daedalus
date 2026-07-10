@@ -1814,10 +1814,14 @@ class UltimateAgent:
         def scaffold_kinds() -> str:
             from core.scaffold import kinds
             return ", ".join(kinds())
-        @self.registry.register(description="Plan a deploy: detect the project in a dir, write the provider config (fly.toml/vercel.json/eas.json), return exact deploy commands. target: vercel|netlify|fly|eas (blank lists options).")
-        def deploy_plan(project_dir: str = ".", target: str = "", app: str = "") -> str:
+        @self.registry.register(description="Plan a deploy: detect the project in a dir, write the provider config (fly.toml/vercel.json/eas.json), return exact deploy commands. target: vercel|netlify|fly|eas (blank lists options). verify=true blocks deploy unless the eval gate passes.")
+        def deploy_plan(project_dir: str = ".", target: str = "", app: str = "", verify: str = "false") -> str:
             from core.deploy import plan
-            return json.dumps(plan(project_dir, target, app), indent=1)
+            return json.dumps(plan(project_dir, target, app, verify=verify.lower() in ("true", "1", "yes")), indent=1)
+        @self.registry.register(description="Verify a project before shipping: eval gate runs build/compile/tests/MCP-handshake and returns a pass|blocked verdict + per-check results.")
+        def verify_project(project_dir: str = ".") -> str:
+            from core.evalgate import gate
+            return json.dumps(gate(project_dir), indent=1)
         @self.registry.register(description="Max Mode: generate N answers from different expert models, judge them, return the best")
         def max_mode(prompt: str, n: str = "3") -> str:
             return json.dumps(self.max_mode.run(prompt, int(n)), indent=1)
