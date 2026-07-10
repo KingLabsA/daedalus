@@ -32,7 +32,7 @@ export default function ChatView() {
   const [input, setInput] = useState("");
   const [showHelp, setShowHelp] = useState(false);
   const [imageData, setImageData] = useState<string | null>(null);
-  const { send, loading } = useAgent();
+  const { send, loading, cancel } = useAgent();
   const { command } = useWs();
   const endRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -252,8 +252,8 @@ export default function ChatView() {
         />
         {loading ? (
           <button style={{ ...styles.sendBtn, background: "#a03d3d" }}
-            onClick={() => command("cancel")} title="Stop the current run">
-            Stop
+            onClick={cancel} title="Stop the current run">
+            ■ Stop
           </button>
         ) : (
           <button style={{ ...styles.sendBtn, opacity: !connected ? 0.5 : 1 }}
