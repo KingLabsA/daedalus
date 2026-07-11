@@ -1095,3 +1095,81 @@ class FileWatcher:
     def status(cls) -> dict:
         running = cls._observer is not None and cls._observer.is_alive()
         return {"running": running, "pending_changes": len(cls._changed_files)}
+
+
+# ============== CHECKPOINT SYSTEM ==============
+class CheckpointManager:
+    """Git-based checkpoint/rollback system."""
+
+    @staticmethod
+    def create_checkpoint(label: str = "") -> str:
+        """Snapshot the working tree WITHOUT disturbing it.
+
+        Uses `git stash create` (builds a stash commit object but does not touch
+        the working tree or the stash stack) + `git stash store` (records it so
+        it's recoverable). This is non-destructive: creating a checkpoint never
+        removes the user's uncommitted work — unlike `git stash push`.
+        """
+        try:
+            status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
+            if not status.stdout.strip():
+                return "Nothing to checkpoint (clean working tree)"
+            tag = label or f"checkpoint-{int(time.time())}"
+            created = subprocess.run(["git", "stash", "create", tag], capture_output=True, text=True)
+            sha = created.stdout.strip()
+            if not sha:
+                return "Nothing to checkpoint (no tracked changes)"
+            subprocess.run(["git", "stash", "store", "-m", tag, sha], capture_output=True, text=True)
+            cp_dir = CHECKPOINTS_DIR / tag
+            cp_dir.mkdir(parents=True, exist_ok=True)
+            meta = {
+                "label": tag,
+                "sha": sha,
+                "timestamp": datetime.now().isoformat(),
+                "files_changed": status.stdout.strip().count("\n") + 1,
+            }
+            (cp_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+            diff = subprocess.run(["git", "diff", "HEAD"], capture_output=True, text=True)
+            if diff.stdout:
+                (cp_dir / "snapshot.diff").write_text(diff.stdout)
+            return f"Checkpoint created: {tag} ({meta['files_changed']} files, working tree untouched)"
+        except Exception as e:
+            return f"Checkpoint error: {e}"
+
+    @staticmethod
+    def list_checkpoints() -> list[dict]:
+        """List all checkpoints."""
+        checkpoints = []
+        for cp_dir in sorted(CHECKPOINTS_DIR.iterdir()):
+            if cp_dir.is_dir():
+                meta_file = cp_dir / "meta.json"
+                if meta_file.exists():
+                    meta = json.loads(meta_file.read_text())
+                    checkpoints.append(meta)
+        return checkpoints
+
+    @staticmethod
+    def restore_checkpoint(label: str) -> str:
+        """Apply a checkpoint by its stored SHA (non-destructive: keeps the stash)."""
+        try:
+            meta_file = CHECKPOINTS_DIR / label / "meta.json"
+            sha = None
+            if meta_file.exists():
+                sha = json.loads(meta_file.read_text()).get("sha")
+            cmd = ["git", "stash", "apply", sha] if sha else ["git", "stash", "apply"]
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode == 0:
+                return f"Restored checkpoint: {label}\n{r.stdout.strip()}"
+            else:
+                return f"Restore failed: {r.stderr.strip()}"
+        except Exception as e:
+            return f"Restore error: {e}"
+
+    @staticmethod
+    def delete_checkpoint(label: str) -> str:
+        """Delete checkpoint metadata."""
+        cp_dir = CHECKPOINTS_DIR / label
+        if cp_dir.exists():
+            shutil.rmtree(cp_dir)
+            return f"Deleted checkpoint: {label}"
+        return f"Checkpoint not found: {label}"

@@ -10,6 +10,7 @@ _EXPORTS = {
     "SelfLearner": "core.tools",
     "HookManager": "core.tools",
     "FileWatcher": "core.tools",
+    "CheckpointManager": "core.tools",
     "CORE_TOOLS": "core.tools",
     "DESTRUCTIVE_TOOLS": "core.tools",
     "BLOCKED_COMMANDS": "core.tools",
@@ -26,6 +27,8 @@ _EXPORTS = {
     "GoalManager": "core.kanban",
     "SubAgent": "core.kanban",
     "ParallelExecutor": "core.kanban",
+    # From core.safety
+    "SafetyManager": "core.safety",
 }
 
 
