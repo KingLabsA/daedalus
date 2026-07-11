@@ -10,7 +10,7 @@ PROVIDER_TIERS: Dict[str, int] = {
     "groq": 1, "cerebras": 1, "novita": 1, "huggingface": 1, "together": 1,
     "deepseek": 2, "google": 2, "mistral": 2, "fireworks": 2, "moonshot": 2, "zhipu": 2, "cohere": 2, "perplexity": 2,
     "openai": 3, "xai": 3, "openrouter": 3, "azure": 3, "bedrock": 3, "replicate": 2,
-    "anthropic": 4, "fable": 4,
+    "anthropic": 4, "fable": 4, "opencode": 4,
 }
 
 HARD_MARKERS = [

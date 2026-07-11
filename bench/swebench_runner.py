@@ -15,8 +15,15 @@ base commit. Scoring happens afterwards with the official harness (Docker):
     #       --run_id daedalus-v2
 
 Honest expectations: results track the routed model. Local 7-8B models will
-score in single digits; use a strong provider (fable/anthropic/deepseek) for a
-publishable number. Budget ~2-10 min per instance.
+score in single digits; use a strong provider for a publishable number. Budget
+~2-10 min per instance.
+
+No Anthropic key? Use OpenCode Zen (frontier models via one key):
+    export OPENCODE_API_KEY=...        # from opencode.ai/zen
+    # optional: export OPENCODE_MODEL=claude-sonnet-4  (or another Zen model)
+    python bench/swebench_runner.py --limit 10 --provider opencode
+Or the already-running local gateway:
+    python bench/swebench_runner.py --limit 10 --provider freellmapi
 """
 import argparse
 import json
