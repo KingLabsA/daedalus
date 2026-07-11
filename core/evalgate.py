@@ -5,16 +5,17 @@ compiles / tests green / MCP server handshakes). deploy planning can require
 this to pass, so a broken app never gets a deploy command. Standalone,
 stdlib-only; the command runner is injectable so tests stay offline.
 """
+
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
 
 from .deploy import detect
 
 
-def _run(cmd: List[str], cwd: str, timeout: int = 600) -> Tuple[int, str]:
+def _run(cmd: list[str], cwd: str, timeout: int = 600) -> tuple[int, str]:
     try:
         p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
         return p.returncode, (p.stdout + p.stderr)[-2000:]
@@ -33,7 +34,7 @@ def _has_build_script(p: Path) -> bool:
         return False
 
 
-def _py_files(p: Path, limit: int = 200) -> List[Path]:
+def _py_files(p: Path, limit: int = 200) -> list[Path]:
     out = []
     for f in p.rglob("*.py"):
         if "node_modules" in f.parts or ".git" in f.parts:
@@ -44,11 +45,11 @@ def _py_files(p: Path, limit: int = 200) -> List[Path]:
     return out
 
 
-def checks_for(project_dir: str, kind: str = "") -> List[Dict]:
+def checks_for(project_dir: str, kind: str = "") -> list[dict]:
     """The verification steps for a project. Each: {name, kind, cmd|py}."""
     p = Path(project_dir)
     kind = kind or detect(project_dir)
-    steps: List[Dict] = []
+    steps: list[dict] = []
 
     node_like = {"static", "next", "node", "tailwind", "shadcn", "supabase", "astro", "svelte", "sveltekit", "web", "react"}
     if kind in node_like or _has_build_script(p):
@@ -75,8 +76,9 @@ def checks_for(project_dir: str, kind: str = "") -> List[Dict]:
     return steps
 
 
-def _py_compile(cwd: str) -> Tuple[int, str]:
+def _py_compile(cwd: str) -> tuple[int, str]:
     import py_compile
+
     errs = []
     for f in _py_files(Path(cwd)):
         try:
@@ -86,12 +88,12 @@ def _py_compile(cwd: str) -> Tuple[int, str]:
     return (0, f"compiled {len(_py_files(Path(cwd)))} files clean") if not errs else (1, "\n".join(errs[:10]))
 
 
-def _mcp_handshake(cwd: str) -> Tuple[int, str]:
+def _mcp_handshake(cwd: str) -> tuple[int, str]:
     try:
-        proc = subprocess.Popen([sys.executable, "server.py"], cwd=cwd,
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        proc = subprocess.Popen([sys.executable, "server.py"], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}) + "\n"
-        proc.stdin.write(req); proc.stdin.flush()
+        proc.stdin.write(req)
+        proc.stdin.flush()
         line = proc.stdout.readline()
         proc.terminate()
         ok = '"result"' in line and "serverInfo" in line
@@ -100,15 +102,13 @@ def _mcp_handshake(cwd: str) -> Tuple[int, str]:
         return 1, str(exc)
 
 
-def run_checks(project_dir: str, kind: str = "",
-               runner: Callable[[List[str], str, int], Tuple[int, str]] = _run) -> Dict:
+def run_checks(project_dir: str, kind: str = "", runner: Callable[[list[str], str, int], tuple[int, str]] = _run) -> dict:
     if not Path(project_dir).exists():
         return {"ok": False, "error": f"No such directory: {project_dir}"}
     kind = kind or detect(project_dir)
     steps = checks_for(project_dir, kind)
     if not steps:
-        return {"ok": True, "kind": kind, "passed": True, "checks": [],
-                "note": "no automated checks for this project kind — passing by default"}
+        return {"ok": True, "kind": kind, "passed": True, "checks": [], "note": "no automated checks for this project kind — passing by default"}
     results, all_pass = [], True
     for step in steps:
         if step.get("py") == "compile":
@@ -123,12 +123,11 @@ def run_checks(project_dir: str, kind: str = "",
     return {"ok": True, "kind": kind, "passed": all_pass, "checks": results}
 
 
-def gate(project_dir: str = ".", kind: str = "", runner=_run) -> Dict:
+def gate(project_dir: str = ".", kind: str = "", runner=_run) -> dict:
     """Verdict used as a deploy gate: {passed, checks, verdict}."""
     r = run_checks(project_dir, kind, runner)
     if not r.get("ok"):
         return r
     failed = [c["name"] for c in r["checks"] if not c["passed"]]
-    r["verdict"] = ("PASS — safe to deploy" if r["passed"]
-                    else f"BLOCKED — failing checks: {', '.join(failed)}")
+    r["verdict"] = "PASS — safe to deploy" if r["passed"] else f"BLOCKED — failing checks: {', '.join(failed)}"
     return r

@@ -2,10 +2,11 @@
 
 classify -> pick the right expert -> consult; or fan out a committee and synthesize.
 """
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Dict, List, Optional
 
-DEFAULT_PROFILES: Dict[str, List[str]] = {
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+DEFAULT_PROFILES: dict[str, list[str]] = {
     "code": ["opencode", "deepseek", "anthropic", "openai", "mistral", "freellmapi", "ollama", "hermes"],
     "reasoning": ["opencode", "openai", "anthropic", "deepseek", "google", "xai", "freellmapi"],
     "vision": ["openai", "google", "zhipu", "xai", "freellmapi"],
@@ -15,7 +16,7 @@ DEFAULT_PROFILES: Dict[str, List[str]] = {
     "search": ["perplexity", "google", "openai", "freellmapi"],
 }
 
-TASK_KEYWORDS: Dict[str, List[str]] = {
+TASK_KEYWORDS: dict[str, list[str]] = {
     "code": ["code", "function", "bug", "refactor", "implement", "compile", "test", "debug", "api", "class ", "def ", "regex"],
     "vision": ["image", "screenshot", "photo", "picture", "diagram", "ui mockup"],
     "search": ["latest", "news", "current", "today", "recent", "search the web"],
@@ -29,8 +30,8 @@ class ModelOrchestra:
     def __init__(
         self,
         call_fn: Callable[[str, str], str],
-        available_fn: Callable[[], List[str]],
-        profiles: Optional[Dict[str, List[str]]] = None,
+        available_fn: Callable[[], list[str]],
+        profiles: dict[str, list[str]] | None = None,
     ):
         self.call_fn = call_fn
         self.available_fn = available_fn
@@ -46,14 +47,14 @@ class ModelOrchestra:
                 best, best_hits = task_type, hits
         return best if best_hits else ("cheap" if len(prompt) < 80 else "reasoning")
 
-    def pick(self, task_type: str) -> Optional[str]:
+    def pick(self, task_type: str) -> str | None:
         available = self.available_fn() or []
         for provider in self.profiles.get(task_type, []):
             if provider in available:
                 return provider
         return available[0] if available else None
 
-    def consult(self, prompt: str, task_type: str = "") -> Dict:
+    def consult(self, prompt: str, task_type: str = "") -> dict:
         task_type = task_type or self.classify(prompt)
         provider = self.pick(task_type)
         if not provider:
@@ -65,9 +66,9 @@ class ModelOrchestra:
         return {"task_type": task_type, "provider": provider, "answer": answer}
 
     # ── Committee (MoE ensemble) ──────────────────────────────
-    def _committee_members(self, task_type: str, n: int) -> List[str]:
+    def _committee_members(self, task_type: str, n: int) -> list[str]:
         available = self.available_fn() or []
-        members: List[str] = []
+        members: list[str] = []
         for provider in self.profiles.get(task_type, []):
             if provider in available and provider not in members:
                 members.append(provider)
@@ -80,12 +81,12 @@ class ModelOrchestra:
                 break
         return members
 
-    def committee(self, prompt: str, n: int = 3, task_type: str = "") -> Dict:
+    def committee(self, prompt: str, n: int = 3, task_type: str = "") -> dict:
         task_type = task_type or self.classify(prompt)
         members = self._committee_members(task_type, max(2, n))
         if not members:
             return {"task_type": task_type, "experts": {}, "synthesis": "No providers available."}
-        answers: Dict[str, str] = {}
+        answers: dict[str, str] = {}
         with ThreadPoolExecutor(max_workers=len(members)) as pool:
             futures = {pool.submit(self.call_fn, m, prompt): m for m in members}
             for future in as_completed(futures):

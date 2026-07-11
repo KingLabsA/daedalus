@@ -1,13 +1,13 @@
 """Failure immune system: remembers how the agent got burned, warns before it repeats."""
-import json
-from typing import Any, Dict, List
+
+from typing import Any
 
 from .store import MemoryStore
 
 ERROR_MARKERS = ("Error", "ToolError", "Traceback", "FAILED", "failed:")
 
 
-def _signature(tool: str, args: Dict[str, Any]) -> str:
+def _signature(tool: str, args: dict[str, Any]) -> str:
     """Stable, compact signature for a tool call: tool name + key argument values."""
     parts = [tool]
     for key in sorted(args)[:4]:
@@ -19,9 +19,9 @@ def _signature(tool: str, args: Dict[str, Any]) -> str:
 class ImmuneSystem:
     def __init__(self, store: MemoryStore):
         self.store = store
-        self._pending: Dict[str, Dict[str, Any]] = {}
+        self._pending: dict[str, dict[str, Any]] = {}
 
-    def observe_calls(self, calls: List[Dict[str, Any]]):
+    def observe_calls(self, calls: list[dict[str, Any]]):
         for call in calls or []:
             cid = call.get("id") or ""
             if cid:
@@ -31,7 +31,7 @@ class ImmuneSystem:
             for key in list(self._pending)[:-100]:
                 self._pending.pop(key, None)
 
-    def observe_results(self, results: List[Dict[str, Any]]) -> int:
+    def observe_results(self, results: list[dict[str, Any]]) -> int:
         recorded = 0
         for res in results or []:
             output = str(res.get("result") or "")
@@ -44,7 +44,7 @@ class ImmuneSystem:
             recorded += 1
         return recorded
 
-    def antibodies_for(self, messages: List[Dict], k: int = 3) -> str:
+    def antibodies_for(self, messages: list[dict], k: int = 3) -> str:
         """Render a warning block of past failures relevant to the current intent."""
         intent = ""
         for msg in reversed(messages):

@@ -12,5 +12,7 @@ RUN pip install --no-cache-dir .
 WORKDIR /workspace
 ENV WS_HOST=0.0.0.0 HERMES_SUBCONSCIOUS=on
 EXPOSE 8765 8899
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8765')" || exit 1
 ENTRYPOINT ["daedalus"]
 CMD ["ws"]

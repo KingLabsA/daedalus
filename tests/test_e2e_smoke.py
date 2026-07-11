@@ -4,7 +4,13 @@ send chat, verify response, test tools/kanban WS commands.
 
 Run with:  python tests/test_e2e_smoke.py
 """
-import asyncio, json, os, signal, subprocess, sys, time
+
+import asyncio
+import json
+import os
+import subprocess
+import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -15,6 +21,7 @@ TIMEOUT = 25  # generous for LLM response
 async def wait_for_server(host: str, port: int, timeout: float = 10) -> bool:
     """Poll until the WS server is accepting connections."""
     import socket
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -63,9 +70,7 @@ async def _test_chat(ws) -> None:
     content = data.get("content", "")
     assert isinstance(content, str), "response content should be a string"
     assert len(content) > 0, "response content should not be empty"
-    ok = "LLM Error" not in content or all(
-        k in os.environ for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
-    )
+    ok = "LLM Error" not in content or all(k in os.environ for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY"))
     status = "LLM-response" if not content.startswith("LLM Error") else "WS-roundtrip"
     print(f"  [PASS] chat: {len(content)} chars ({status})")
 
@@ -75,9 +80,8 @@ async def _test_provider_switch(ws) -> None:
     await ws.send(json.dumps({"type": "command", "command": "provider:ollama"}))
     resp = await asyncio.wait_for(ws.recv(), timeout=5)
     data = json.loads(resp)
-    assert "ollama" in json.dumps(data).lower() or data.get("type") != "error", \
-        f"provider switch failed: {data}"
-    print(f"  [PASS] provider switch: ollama")
+    assert "ollama" in json.dumps(data).lower() or data.get("type") != "error", f"provider switch failed: {data}"
+    print("  [PASS] provider switch: ollama")
 
 
 async def main():
@@ -86,7 +90,8 @@ async def main():
         print("Starting Python WS server...")
         proc = subprocess.Popen(
             [sys.executable, SERVER_SCRIPT, "ws"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             cwd=ROOT,
         )
 
@@ -98,6 +103,7 @@ async def main():
         print(f"  [PASS] Server ready on {HOST}:{PORT}")
 
         import websockets
+
         async with websockets.connect(f"ws://{HOST}:{PORT}") as ws:
             await _test_connection(ws)
             await _test_tools_command(ws)
@@ -105,9 +111,9 @@ async def main():
             await _test_provider_switch(ws)
             await _test_chat(ws)
 
-        print(f"\n{'='*45}")
+        print(f"\n{'=' * 45}")
         print(" All 5 E2E smoke tests passed!")
-        print(f"{'='*45}")
+        print(f"{'=' * 45}")
 
     except Exception as e:
         print(f"\n  [FAIL] {type(e).__name__}: {e}")

@@ -1,4 +1,5 @@
 """Tests for Phase 9 — provider liveness, local guardrails, retry/failover, streaming."""
+
 import os
 import sys
 import tempfile
@@ -12,8 +13,14 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
 import agent_ultimate as au
 from agent_ultimate import (
-    CORE_TOOLS, PROVIDER_CONFIGS, UltimateAgent, _model_for, _openai_call_kwargs,
-    _probe_provider, _provider_alive, _LIVE_CACHE,
+    _LIVE_CACHE,
+    CORE_TOOLS,
+    PROVIDER_CONFIGS,
+    UltimateAgent,
+    _model_for,
+    _openai_call_kwargs,
+    _probe_provider,
+    _provider_alive,
 )
 
 
@@ -38,6 +45,7 @@ def _fake_response(content="done", tool_calls=None):
 
 
 # ── provider config ──────────────────────────────────────────
+
 
 def test_freellmapi_provider_exists():
     cfg = PROVIDER_CONFIGS["freellmapi"]
@@ -68,6 +76,7 @@ def test_openai_call_kwargs():
 
 
 # ── liveness ─────────────────────────────────────────────────
+
 
 def test_probe_local_provider(monkeypatch):
     calls = {}
@@ -108,6 +117,7 @@ def test_provider_alive_caches(monkeypatch):
 
 # ── local guardrails in run_loop ─────────────────────────────
 
+
 def test_local_provider_gets_pruned_tools(agent, monkeypatch):
     captured = {}
 
@@ -129,6 +139,7 @@ def test_local_provider_gets_pruned_tools(agent, monkeypatch):
 
 
 # ── retry + failover ─────────────────────────────────────────
+
 
 def test_retry_once_then_success(agent, monkeypatch):
     attempts = {"n": 0}
@@ -198,6 +209,7 @@ def test_all_providers_dead_returns_error(agent, monkeypatch):
 
 # ── streaming ────────────────────────────────────────────────
 
+
 def test_on_token_streams_and_assembles(agent, monkeypatch):
     def fake_stream(messages, schemas, provider=None):
         yield "Hel", None, {}
@@ -218,9 +230,11 @@ def test_on_token_streams_and_assembles(agent, monkeypatch):
 
 def test_opencode_provider_config():
     from core.providers import PROVIDER_CONFIGS
+
     c = PROVIDER_CONFIGS["opencode"]
     assert c["env"] == "OPENCODE_API_KEY"
     assert "opencode.ai" in c["base"] and c["base"].endswith("/v1")
     assert c["lib"] == "openai"  # OpenAI-compatible gateway
     from core.epistemic.router import PROVIDER_TIERS
+
     assert PROVIDER_TIERS["opencode"] == 4  # strong tier

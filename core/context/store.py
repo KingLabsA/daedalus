@@ -1,10 +1,11 @@
 """SQLite-backed persistent memory with FTS5 search, checkpoints, and failure records."""
+
 import json
 import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 VALID_KINDS = ("project", "decision", "note", "preference")
 
@@ -113,10 +114,10 @@ class MemoryStore:
         self._render_memory_md()
         return cur.rowcount > 0
 
-    def search_memories(self, query: str, k: int = 5, kinds: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def search_memories(self, query: str, k: int = 5, kinds: list[str] | None = None) -> list[dict[str, Any]]:
         q = _fts_query(query)
         kind_filter = ""
-        params: List[Any] = [q]
+        params: list[Any] = [q]
         if kinds:
             kind_filter = f" AND m.kind IN ({','.join('?' * len(kinds))})"
             params.extend(kinds)
@@ -138,15 +139,13 @@ class MemoryStore:
                 )
         return [dict(r) for r in rows]
 
-    def list_memories(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_memories(self, limit: int = 50) -> list[dict[str, Any]]:
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM mem_entries ORDER BY importance DESC, last_used DESC LIMIT ?", (limit,)
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM mem_entries ORDER BY importance DESC, last_used DESC LIMIT ?", (limit,)).fetchall()
         return [dict(r) for r in rows]
 
     # ── Checkpoints ───────────────────────────────────────────
-    def write_checkpoint(self, session_id: str, data: Dict[str, Any]) -> int:
+    def write_checkpoint(self, session_id: str, data: dict[str, Any]) -> int:
         with self._conn() as conn:
             cur = conn.execute(
                 "INSERT INTO ctx_checkpoints (session_id, data, created_at) VALUES (?,?,?)",
@@ -156,7 +155,7 @@ class MemoryStore:
         self._render_checkpoint_md(data)
         return cp_id
 
-    def latest_checkpoint(self, session_id: str = "") -> Optional[Dict[str, Any]]:
+    def latest_checkpoint(self, session_id: str = "") -> dict[str, Any] | None:
         with self._conn() as conn:
             if session_id:
                 row = conn.execute(
@@ -171,9 +170,7 @@ class MemoryStore:
     def record_failure(self, tool: str, signature: str, error: str, remedy: str = "") -> int:
         error = error[:1000]
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT id, hits FROM failures WHERE tool = ? AND signature = ?", (tool, signature)
-            ).fetchone()
+            row = conn.execute("SELECT id, hits FROM failures WHERE tool = ? AND signature = ?", (tool, signature)).fetchone()
             if row:
                 conn.execute(
                     "UPDATE failures SET hits = hits + 1, error = ?, last_seen = ?, remedy = CASE WHEN ? != '' THEN ? ELSE remedy END WHERE id = ?",
@@ -186,7 +183,7 @@ class MemoryStore:
             )
             return cur.lastrowid
 
-    def find_antibodies(self, query: str, k: int = 3) -> List[Dict[str, Any]]:
+    def find_antibodies(self, query: str, k: int = 3) -> list[dict[str, Any]]:
         q = _fts_query(query)
         with self._conn() as conn:
             rows = conn.execute(
@@ -198,7 +195,7 @@ class MemoryStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         with self._conn() as conn:
             return {
                 "memories": conn.execute("SELECT COUNT(*) FROM mem_entries").fetchone()[0],
@@ -216,7 +213,7 @@ class MemoryStore:
         except OSError:
             pass
 
-    def _render_checkpoint_md(self, data: Dict[str, Any]):
+    def _render_checkpoint_md(self, data: dict[str, Any]):
         try:
             lines = ["# Session Checkpoint", ""]
             for key, val in data.items():

@@ -1,13 +1,12 @@
 """Tests for core.scaffold — text-to-app project generation (offline, deterministic)."""
+
 import json
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.scaffold import kinds, scaffold, _slug
+from core.scaffold import _slug, kinds, scaffold
 
 
 def test_kinds_stable():
@@ -109,6 +108,7 @@ def test_astro_and_svelte(tmp_path):
 
 def test_canonical_command_strings():
     from core.scaffold import canonical_command
+
     assert "create vite" in canonical_command("web", "My App")
     assert "my-app" in canonical_command("web", "My App")
     assert "create-next-app" in canonical_command("next", "x")
@@ -119,12 +119,14 @@ def test_canonical_command_strings():
 
 def test_official_prefers_cli_when_present():
     from core.scaffold import official
+
     r = official("web", "Demo", which=lambda c: "/usr/bin/" + c)
     assert r["mode"] == "official" and "create vite" in r["command"]
 
 
 def test_official_falls_back_to_skeleton(tmp_path, monkeypatch):
     from core.scaffold import official
+
     monkeypatch.chdir(tmp_path)
     r = official("web", "Demo", which=lambda c: None)  # no npm/npx
     assert r["mode"] == "skeleton" and r["ok"]
@@ -134,6 +136,7 @@ def test_official_falls_back_to_skeleton(tmp_path, monkeypatch):
 
 def test_official_unknown_kind_skeleton(tmp_path, monkeypatch):
     from core.scaffold import official
+
     monkeypatch.chdir(tmp_path)
     r = official("mcp", "M", which=lambda c: "/bin/" + c)  # mcp has no canonical
     assert r["mode"] == "skeleton"

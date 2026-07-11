@@ -1,7 +1,8 @@
 """Persistent tool-event log — the substrate dream/distill mine across sessions."""
+
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _now() -> str:
@@ -12,7 +13,7 @@ class EventLog:
     def __init__(self, db_path: str = "hermes_ultimate.db", session_id: str = "default"):
         self.db_path = db_path
         self.session_id = session_id
-        self._pending: Dict[str, Dict[str, Any]] = {}
+        self._pending: dict[str, dict[str, Any]] = {}
         self._registered = []
         self._init_db()
 
@@ -45,7 +46,7 @@ class EventLog:
             hook_manager.unregister(event, handler)
         self._registered = []
 
-    def _on_pre_tool(self, calls: Optional[List[Dict]] = None, **kwargs):
+    def _on_pre_tool(self, calls: list[dict] | None = None, **kwargs):
         try:
             for call in calls or []:
                 cid = call.get("id") or ""
@@ -57,7 +58,7 @@ class EventLog:
         except Exception:
             pass
 
-    def _on_post_tool(self, results: Optional[List[Dict]] = None, **kwargs):
+    def _on_post_tool(self, results: list[dict] | None = None, **kwargs):
         try:
             rows = []
             for res in results or []:
@@ -87,7 +88,7 @@ class EventLog:
                 (self.session_id, tool, args_sig, 1 if ok else 0, _now()),
             )
 
-    def sequences(self, max_sessions: int = 20) -> List[List[str]]:
+    def sequences(self, max_sessions: int = 20) -> list[list[str]]:
         """Ordered tool-name sequences, one list per session (most recent sessions)."""
         with self._conn() as conn:
             sessions = [
@@ -99,13 +100,11 @@ class EventLog:
             ]
             out = []
             for sid in sessions:
-                rows = conn.execute(
-                    "SELECT tool FROM tool_events WHERE session_id = ? ORDER BY id", (sid,)
-                ).fetchall()
+                rows = conn.execute("SELECT tool FROM tool_events WHERE session_id = ? ORDER BY id", (sid,)).fetchall()
                 out.append([r[0] for r in rows])
         return out
 
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         with self._conn() as conn:
             return {
                 "events": conn.execute("SELECT COUNT(*) FROM tool_events").fetchone()[0],

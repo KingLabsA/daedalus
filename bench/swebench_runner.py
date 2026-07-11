@@ -25,6 +25,7 @@ No Anthropic key? Use OpenCode Zen (frontier models via one key):
 Or the already-running local gateway:
     python bench/swebench_runner.py --limit 10 --provider freellmapi
 """
+
 import argparse
 import json
 import os
@@ -44,7 +45,7 @@ def sh(cmd, cwd=None, timeout=600):
 
 
 def checkout(instance, cache: Path) -> Path:
-    repo = instance["repo"]                      # e.g. "django/django"
+    repo = instance["repo"]  # e.g. "django/django"
     base = instance["base_commit"]
     mirror = cache / repo.replace("/", "__")
     if not mirror.exists():
@@ -75,6 +76,7 @@ def run_instance(instance, provider: str, max_iters: int) -> str:
             os.environ["LLM_PROVIDER"] = provider
         # fresh import per process would be cleaner; acceptable for a runner
         from agent_ultimate import UltimateAgent
+
         agent = UltimateAgent()
         if provider:
             agent.provider = provider
@@ -129,13 +131,18 @@ def main():
             except Exception as exc:
                 print(f"[{i}/{len(todo)}] {iid}: ERROR {exc}")
                 patch = ""
-            fh.write(json.dumps({
-                "instance_id": iid,
-                "model_name_or_path": f"daedalus-v2-{args.provider or 'autoroute'}",
-                "model_patch": patch,
-            }) + "\n")
+            fh.write(
+                json.dumps(
+                    {
+                        "instance_id": iid,
+                        "model_name_or_path": f"daedalus-v2-{args.provider or 'autoroute'}",
+                        "model_patch": patch,
+                    }
+                )
+                + "\n"
+            )
             fh.flush()
-            print(f"[{i}/{len(todo)}] {iid}: {'patch ' + str(len(patch)) + 'B' if patch else 'EMPTY'} in {time.time()-t0:.0f}s")
+            print(f"[{i}/{len(todo)}] {iid}: {'patch ' + str(len(patch)) + 'B' if patch else 'EMPTY'} in {time.time() - t0:.0f}s")
 
     print(f"\npredictions -> {out}\nEvaluate with the official swebench harness (see module docstring).")
 

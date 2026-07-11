@@ -1,12 +1,13 @@
 """Subconscious — sleep-time compute. Hermes keeps thinking while the user is away:
 consolidates memory (dream) and mines workflows into skills (distill) during idle time.
 """
+
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 
 
 class Subconscious:
@@ -14,13 +15,13 @@ class Subconscious:
         self,
         dreamer=None,
         distiller=None,
-        session_loader: Optional[Callable[[int], List[List[Dict]]]] = None,
+        session_loader: Callable[[int], list[list[dict]]] | None = None,
         root_dir: str = ".hermes/memory",
         idle_seconds: float = 180.0,
         poll_interval: float = 15.0,
         max_cycles_per_hour: int = 4,
-        enabled: Optional[bool] = None,
-        use_llm: Optional[bool] = None,
+        enabled: bool | None = None,
+        use_llm: bool | None = None,
     ):
         self.dreamer = dreamer
         self.distiller = distiller
@@ -39,10 +40,10 @@ class Subconscious:
         self._lock = threading.Lock()
         self._last_activity = time.monotonic()
         self._cycled_since_activity = False
-        self._cycle_times: List[float] = []
-        self._reports: List[Dict] = []
+        self._cycle_times: list[float] = []
+        self._reports: list[dict] = []
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._registered = []
 
     # ── Activity tracking ─────────────────────────────────────
@@ -95,8 +96,8 @@ class Subconscious:
             return len(self._cycle_times) < self.max_cycles_per_hour
 
     # ── The cycle ─────────────────────────────────────────────
-    def run_cycle(self) -> Dict:
-        report: Dict = {"at": datetime.now().isoformat(timespec="seconds")}
+    def run_cycle(self) -> dict:
+        report: dict = {"at": datetime.now().isoformat(timespec="seconds")}
         try:
             if self.dreamer and self.session_loader:
                 sessions = self.session_loader(5)
@@ -124,7 +125,7 @@ class Subconscious:
         except OSError:
             pass
 
-    def status(self) -> Dict:
+    def status(self) -> dict:
         with self._lock:
             return {
                 "enabled": self.enabled,

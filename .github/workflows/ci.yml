@@ -6,31 +6,52 @@ jobs:
   backend:
     runs-on: ${{ matrix.os }}
     strategy:
-      matrix: { os: [ubuntu-latest, macos-latest], python: ["3.11", "3.12"] }
+      matrix: { os: [ubuntu-latest, macos-latest], python: ["3.11", "3.12", "3.13"] }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "${{ matrix.python }}" }
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
       - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
       - run: python -m pytest tests/ -q --ignore=tests/test_e2e_smoke.py --ignore=tests/test_e2e_ws.py
         env: { OPENAI_API_KEY: sk-test, HERMES_SUBCONSCIOUS: off }
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: mypy agent_ultimate.py core/ --ignore-missing-imports --no-error-summary || true
+
   frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with: { node-version: "20" }
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
       - run: cd desktop && npm ci && npx tsc --noEmit && npm run build
       - run: cd vscode-extension && npm ci && node --check extension.js
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [backend, frontend]
+    needs: [backend, typecheck, frontend]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
+        with:
+          python-version: "3.12"
+          cache: pip
       - run: pip install build twine
       - run: python -m build
       - run: python -m twine upload --skip-existing dist/*

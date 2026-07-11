@@ -1,12 +1,11 @@
 """Ollama-backed providers must use the native /api/chat (num_ctx honored) —
 the OpenAI-compatible endpoint silently ignores options.num_ctx (verified
 empirically: hermes3:8b loaded at 131k ctx / 23 GB despite the cap)."""
+
 import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -22,8 +21,7 @@ def test_payload_has_num_ctx_and_tools(monkeypatch):
 
 
 def test_response_serializes_dict_arguments():
-    resp = _ollama_response({"content": "", "tool_calls": [
-        {"function": {"name": "write_file", "arguments": {"filepath": "a.py", "content": "x"}}}]})
+    resp = _ollama_response({"content": "", "tool_calls": [{"function": {"name": "write_file", "arguments": {"filepath": "a.py", "content": "x"}}}]})
     tc = resp.tool_calls[0]
     assert tc.function.name == "write_file"
     assert json.loads(tc.function.arguments) == {"filepath": "a.py", "content": "x"}
@@ -36,13 +34,13 @@ def test_call_routes_ollama_to_native_api(monkeypatch):
         captured["url"] = url
         captured["payload"] = json
         return SimpleNamespace(
-            status_code=200, raise_for_status=lambda: None,
-            json=lambda: {"message": {"content": "native ok"}, "prompt_eval_count": 5, "eval_count": 2})
+            status_code=200, raise_for_status=lambda: None, json=lambda: {"message": {"content": "native ok"}, "prompt_eval_count": 5, "eval_count": 2}
+        )
 
     monkeypatch.setattr("requests.post", fake_post)
     resp = ProviderRouter.call([{"role": "user", "content": "hi"}], [], "hermes")
     assert resp.content == "native ok"
-    assert captured["url"].endswith("/api/chat")            # native, NOT /v1/chat/completions
+    assert captured["url"].endswith("/api/chat")  # native, NOT /v1/chat/completions
     assert "num_ctx" in captured["payload"]["options"]
     assert captured["payload"]["stream"] is False
 

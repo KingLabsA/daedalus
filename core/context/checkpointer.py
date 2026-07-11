@@ -1,8 +1,8 @@
 """Builds structured session checkpoints from message history."""
-import json
+
 import re
 from collections import Counter
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 from .store import MemoryStore
 
@@ -10,15 +10,15 @@ _PATH_RE = re.compile(r"(?:^|[\s\"'(=])((?:\.{0,2}/)?[\w./-]+\.(?:py|ts|tsx|js|j
 
 
 class Checkpointer:
-    def __init__(self, store: MemoryStore, summarize_fn: Optional[Callable[[str], str]] = None):
+    def __init__(self, store: MemoryStore, summarize_fn: Callable[[str], str] | None = None):
         self.store = store
         self.summarize_fn = summarize_fn
 
-    def build(self, messages: List[Dict]) -> Dict:
+    def build(self, messages: list[dict]) -> dict:
         goal = ""
         last_request = ""
         last_assistant = ""
-        files: List[str] = []
+        files: list[str] = []
         tools: Counter = Counter()
         for msg in messages:
             role = msg.get("role", "")
@@ -48,9 +48,7 @@ class Checkpointer:
         }
         if self.summarize_fn:
             try:
-                transcript = "\n".join(
-                    f"{m.get('role')}: {str(m.get('content') or '')[:300]}" for m in messages[-40:]
-                )
+                transcript = "\n".join(f"{m.get('role')}: {str(m.get('content') or '')[:300]}" for m in messages[-40:])
                 checkpoint["summary"] = str(
                     self.summarize_fn(
                         "Summarize the current state of this coding session in <150 words. "
@@ -61,13 +59,13 @@ class Checkpointer:
                 checkpoint["summary"] = ""
         return checkpoint
 
-    def save(self, session_id: str, messages: List[Dict]) -> Dict:
+    def save(self, session_id: str, messages: list[dict]) -> dict:
         checkpoint = self.build(messages)
         self.store.write_checkpoint(session_id, checkpoint)
         return checkpoint
 
     @staticmethod
-    def render(checkpoint: Dict) -> str:
+    def render(checkpoint: dict) -> str:
         parts = ["[SESSION CHECKPOINT]"]
         for key in ("goal", "last_request", "summary", "last_assistant"):
             if checkpoint.get(key):

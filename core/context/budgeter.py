@@ -1,12 +1,12 @@
 """Token estimation and budget allocation for context injection."""
+
 import os
-from typing import Dict, List, Union
 
 CHARS_PER_TOKEN = 4
 MSG_OVERHEAD_TOKENS = 4
 
 
-def estimate_tokens(payload: Union[str, List[Dict]]) -> int:
+def estimate_tokens(payload: str | list[dict]) -> int:
     """Rough token estimate: chars/4. Accepts a string or a message list."""
     if isinstance(payload, str):
         return max(1, len(payload) // CHARS_PER_TOKEN)
@@ -29,10 +29,10 @@ class TokenBudgeter:
     def budget(self) -> int:
         return self.max_context_tokens - self.output_reserve
 
-    def over_budget(self, messages: List[Dict]) -> bool:
+    def over_budget(self, messages: list[dict]) -> bool:
         return estimate_tokens(messages) > self.budget * self.pressure
 
-    def allocate(self, weights: Dict[str, float], total: int) -> Dict[str, int]:
+    def allocate(self, weights: dict[str, float], total: int) -> dict[str, int]:
         """Split `total` tokens across sections proportionally to weights."""
         wsum = sum(weights.values()) or 1.0
         return {name: int(total * w / wsum) for name, w in weights.items()}

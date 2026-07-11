@@ -3,12 +3,12 @@
 Detects hardware (RAM, cores, Apple Silicon, NVIDIA) and tiers local model
 recommendations accordingly; lists cloud models reachable through configured keys.
 """
-import json
+
 import os
 import platform
 import shutil
 import subprocess
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 # (min_ram_gb, [model, ...]) — q4-ish quants; unified memory counts fully on Apple Silicon
 LOCAL_TIERS = [
@@ -33,7 +33,7 @@ CLOUD_HIGHLIGHTS = {
 }
 
 
-def default_spec_probe() -> Dict:
+def default_spec_probe() -> dict:
     system = platform.system().lower()
     machine = platform.machine().lower()
     ram_gb = 0.0
@@ -59,7 +59,7 @@ def default_spec_probe() -> Dict:
     }
 
 
-def default_ollama_list() -> List[str]:
+def default_ollama_list() -> list[str]:
     if not shutil.which("ollama"):
         return []
     try:
@@ -76,31 +76,33 @@ def default_ollama_list() -> List[str]:
 class ModelAdvisor:
     def __init__(
         self,
-        spec_probe: Callable[[], Dict] = default_spec_probe,
-        ollama_list: Callable[[], List[str]] = default_ollama_list,
-        provider_configs: Optional[Dict[str, dict]] = None,
-        env: Optional[dict] = None,
+        spec_probe: Callable[[], dict] = default_spec_probe,
+        ollama_list: Callable[[], list[str]] = default_ollama_list,
+        provider_configs: dict[str, dict] | None = None,
+        env: dict | None = None,
     ):
         self.spec_probe = spec_probe
         self.ollama_list = ollama_list
         self.provider_configs = provider_configs or {}
         self.env = env if env is not None else dict(os.environ)
 
-    def advise(self) -> Dict:
+    def advise(self) -> dict:
         specs = self.spec_probe()
         installed = set(self.ollama_list())
         # Apple Silicon unified memory: the GPU shares all RAM; discrete-GPU machines
         # without NVIDIA are effectively CPU-bound, so be conservative.
         usable_gb = specs["ram_gb"] if (specs["apple_silicon"] or specs["nvidia_gpu"]) else specs["ram_gb"] * 0.6
-        local: List[Dict] = []
+        local: list[dict] = []
         for min_ram, models in LOCAL_TIERS:
             if usable_gb >= min_ram:
                 for model in models:
-                    local.append({
-                        "model": model,
-                        "tier_ram_gb": min_ram,
-                        "installed": any(model.split(":")[0] in m for m in installed),
-                    })
+                    local.append(
+                        {
+                            "model": model,
+                            "tier_ram_gb": min_ram,
+                            "installed": any(model.split(":")[0] in m for m in installed),
+                        }
+                    )
         cloud = {}
         for name, cfg in self.provider_configs.items():
             env_key = cfg.get("env", "")
@@ -117,7 +119,7 @@ class ModelAdvisor:
             "recommended": {"local": best_local, "cloud": best_cloud},
         }
 
-    def render(self, advice: Optional[Dict] = None) -> str:
+    def render(self, advice: dict | None = None) -> str:
         advice = advice or self.advise()
         specs = advice["specs"]
         lines = [

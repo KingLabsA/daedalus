@@ -1,29 +1,60 @@
 #!/usr/bin/env python3
-import os, sys, json, sqlite3, subprocess, threading, time, asyncio, tempfile, inspect, importlib, io, uuid, socket, hashlib, re
-from pathlib import Path
+import asyncio
+import hashlib
+import inspect
+import io
+import json
+import os
+import re
 import shutil
-from typing import List, Dict, Any, Optional, Callable, Tuple
-from datetime import datetime
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
 from dotenv import load_dotenv
 
+from core.changeset import ChangesetManager, safe_repo_path
+from core.cognition import Distiller, Dreamer, EventLog, GoalJudge, Subconscious
 from core.context import ContextEngine
-from core.cognition import EventLog, Dreamer, Distiller, GoalJudge, Subconscious
-from core.intel import CodeIntel, SemanticIndex, CausalWorldModel, WorldModelSentinel, LspClient, EmbeddingIndex, HybridSearch
+from core.epistemic import CalibrationTracker, CostAwareRouter, MaxMode
+from core.intel import CausalWorldModel, CodeIntel, EmbeddingIndex, HybridSearch, LspClient, SemanticIndex, WorldModelSentinel
+from core.observability import Telemetry
+from core.platform import DependencyScanner, McpClient, ModelAdvisor, ProfileBuilder
+from core.providers import (
+    COST_PER_1K,
+    HERMES_CONFIG_PATH,
+    LLM_PROVIDER,
+    MODEL_NAME,
+    PROVIDER_CONFIGS,
+    ProviderRouter,
+    _LIVE_CACHE,
+    _LIVE_TTL,
+    _available_providers,
+    _get_cost_summary,
+    _get_provider_client,
+    _live_providers,
+    _load_config,
+    _model_for,
+    _openai_call_kwargs,
+    _probe_provider,
+    _provider_alive,
+    _save_config,
+    _track_cost,
+    session_costs,
+)
 from core.senses import ModelOrchestra, Vision, VoiceIO
 from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
-from core.platform import McpClient, DependencyScanner, ProfileBuilder, ModelAdvisor
-from core.epistemic import CalibrationTracker, CostAwareRouter, MaxMode
-from core.changeset import ChangesetManager, safe_repo_path
 from core.server import WebSocketServer as _CoreWebSocketServer, ws_token_ok
-from core.providers import (
-    COST_PER_1K, session_costs, HERMES_CONFIG_PATH, _load_config, _save_config,
-    _track_cost, _get_cost_summary, LLM_PROVIDER, MODEL_NAME, PROVIDER_CONFIGS,
-    _get_provider_client, _model_for, _openai_call_kwargs, ProviderRouter,
-    _available_providers, _LIVE_CACHE, _LIVE_TTL, _probe_provider, _provider_alive, _live_providers,
-)
-from core.observability import Telemetry
 
 # Fable 5 leads the reasoning/creative expert profiles when its key is present
 for _profile_name in ("reasoning", "creative", "long_context"):
@@ -36,10 +67,18 @@ load_dotenv()
 BLOCKED_COMMANDS = ["rm -rf /", "sudo rm -rf", "format ", "mkfs", "dd if=", ":(){ :|:& };:"]
 MAX_FILE_SIZE = 500_000
 PROMPT_INJECTION_PATTERNS = [
-    "ignore all previous", "disregard", "forget your instructions",
-    "you are now", "act as", "system prompt", "new instructions",
-    "override", "pretend you are", "you must obey",
+    "ignore all previous",
+    "disregard",
+    "forget your instructions",
+    "you are now",
+    "act as",
+    "system prompt",
+    "new instructions",
+    "override",
+    "pretend you are",
+    "you must obey",
 ]
+
 
 def _is_safe_command(cmd: str) -> bool:
     lowered = cmd.lower()
@@ -48,12 +87,14 @@ def _is_safe_command(cmd: str) -> bool:
             return False
     return True
 
+
 def _check_prompt_injection(text: str) -> bool:
     lowered = text.lower()
     for pattern in PROMPT_INJECTION_PATTERNS:
         if pattern in lowered:
             return True
     return False
+
 
 MAX_MESSAGES = 30
 DB_FILE = os.getenv("DB_FILE", "hermes_ultimate.db")
@@ -69,19 +110,38 @@ PLUGIN_REGISTRY_URL = os.getenv("PLUGIN_REGISTRY_URL", "https://hermes-plugins.f
 SAFETY_MODE = os.getenv("SAFETY_MODE", "suggest")  # suggest, plan, auto
 # Local models get a pruned toolset — 80+ schemas bury small models and blow up context
 CORE_TOOLS = [
-    "read_file", "write_file", "append_file", "edit_file_line", "run_command",
-    "grep", "list_files", "git_status", "git_diff_preview", "git_commit",
-    "semantic_search", "search_index", "remember", "recall_memory", "task_board", "execute_python",
+    "read_file",
+    "write_file",
+    "append_file",
+    "edit_file_line",
+    "run_command",
+    "grep",
+    "list_files",
+    "git_status",
+    "git_diff_preview",
+    "git_commit",
+    "semantic_search",
+    "search_index",
+    "remember",
+    "recall_memory",
+    "task_board",
+    "execute_python",
 ]
 # tools that modify the filesystem/system — subject to interactive diff-approval
 DESTRUCTIVE_TOOLS = {"write_file", "append_file", "edit_file_line", "run_command", "git_commit", "git_push", "git_undo"}
+
+
 def _is_destructive(name: str) -> bool:
     return name in DESTRUCTIVE_TOOLS
+
 
 class _Cancelled(Exception):
     """Raised to abort an in-flight agent run when cancel_event is set."""
 
+
 _MENTION_RE = re.compile(r"(?<![\w/])@([\w./\-]+\.\w+|[\w./\-]+/[\w./\-]+)")
+
+
 def _expand_mentions(text: str, max_files: int = 6, max_bytes: int = 60_000) -> str:
     """Expand @path references into attached file contents (like Cursor's @file).
     Only real files under the cwd are attached; the original text is preserved."""
@@ -109,20 +169,25 @@ def _expand_mentions(text: str, max_files: int = 6, max_bytes: int = 60_000) -> 
         return text
     return text + "\n\n[Attached files referenced with @]\n" + "\n\n".join(attachments)
 
+
 def _unified_diff(old: str, new: str, path: str) -> str:
     import difflib
-    lines = list(difflib.unified_diff(
-        old.splitlines(), new.splitlines(),
-        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=2))
+
+    lines = list(difflib.unified_diff(old.splitlines(), new.splitlines(), fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=2))
     return "\n".join(lines[:200]) if lines else "(no textual change)"
 
+
 # Streaming queue for live command output
-_stream_queue: List[Dict] = []
+_stream_queue: list[dict] = []
 _stream_lock = threading.Lock()
-def _push_stream(entry: Dict):
+
+
+def _push_stream(entry: dict):
     with _stream_lock:
         _stream_queue.append(entry)
-def _drain_stream() -> List[Dict]:
+
+
+def _drain_stream() -> list[dict]:
     with _stream_lock:
         out = list(_stream_queue)
         _stream_queue.clear()
@@ -131,31 +196,42 @@ def _drain_stream() -> List[Dict]:
 
 class ToolRegistry:
     def __init__(self):
-        self._tools: Dict[str, Callable] = {}
-        self._metadata: Dict[str, Dict] = {}
+        self._tools: dict[str, Callable] = {}
+        self._metadata: dict[str, dict] = {}
+
     def register(self, name: str = None, description: str = ""):
         def decorator(func):
             tool_name = name or func.__name__
             self._tools[tool_name] = func
             self._metadata[tool_name] = {"description": description or func.__doc__ or "", "signature": inspect.signature(func)}
             return func
+
         return decorator
-    def get(self, name: str) -> Optional[Callable]:
+
+    def get(self, name: str) -> Callable | None:
         return self._tools.get(name)
-    def list_tools(self) -> List[str]:
+
+    def list_tools(self) -> list[str]:
         return list(self._tools.keys())
-    def execute(self, name: str, args: Dict[str, Any]) -> str:
+
+    def execute(self, name: str, args: dict[str, Any]) -> str:
         func = self.get(name)
-        if not func: return f"Error: Tool '{name}' not found."
-        try: return str(func(**args))
-        except Exception as e: return f"ToolError: {e}"
-    def execute_parallel(self, calls: List[Dict]) -> List[Dict]:
+        if not func:
+            return f"Error: Tool '{name}' not found."
+        try:
+            return str(func(**args))
+        except Exception as e:
+            return f"ToolError: {e}"
+
+    def execute_parallel(self, calls: list[dict]) -> list[dict]:
         with ThreadPoolExecutor(max_workers=len(calls)) as executor:
             futures = {executor.submit(self.execute, c["name"], c["args"]): c for c in calls}
             results = []
             for future in as_completed(futures):
-                call = futures[future]; results.append({"id": call["id"], "name": call["name"], "result": future.result()})
+                call = futures[future]
+                results.append({"id": call["id"], "name": call["name"], "result": future.result()})
             return results
+
     def get_openai_schemas(self):
         schemas = []
         for name, func in self._tools.items():
@@ -163,9 +239,11 @@ class ToolRegistry:
             params = {"type": "object", "properties": {}, "required": []}
             for p_name, p_param in sig.parameters.items():
                 params["properties"][p_name] = {"type": "string"}
-                if p_param.default == inspect.Parameter.empty: params["required"].append(p_name)
+                if p_param.default == inspect.Parameter.empty:
+                    params["required"].append(p_name)
             schemas.append({"type": "function", "function": {"name": name, "description": self._metadata[name]["description"], "parameters": params}})
         return schemas
+
     def get_anthropic_schemas(self):
         schemas = []
         for name, func in self._tools.items():
@@ -173,35 +251,47 @@ class ToolRegistry:
             params = {"type": "object", "properties": {}, "required": []}
             for p_name, p_param in sig.parameters.items():
                 params["properties"][p_name] = {"type": "string"}
-                if p_param.default == inspect.Parameter.empty: params["required"].append(p_name)
+                if p_param.default == inspect.Parameter.empty:
+                    params["required"].append(p_name)
             schemas.append({"name": name, "description": self._metadata[name]["description"], "input_schema": params})
         return schemas
 
+
 registry = ToolRegistry()
+
 
 @registry.register(description="Read the contents of a file")
 def read_file(filepath: str) -> str:
-    with open(os.path.expanduser(filepath), "r") as f: return f.read()
+    with open(os.path.expanduser(filepath)) as f:
+        return f.read()
+
 
 def _git_stage(path: str) -> str:
     try:
         r = subprocess.run(["git", "add", path], capture_output=True, text=True)
         return r.stderr or ""
-    except: return ""
+    except:
+        return ""
+
 
 def _git_diff(path: str = "") -> str:
     try:
         cmd = ["git", "diff", "--no-color", path] if path else ["git", "diff", "--no-color"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         return r.stdout or "(no diff)"
-    except: return ""
+    except:
+        return ""
+
 
 def _pyright_diagnostics(target: str = ".") -> str:
     try:
         r = subprocess.run(["pyright", target], capture_output=True, text=True, timeout=30)
         return r.stdout or "(no output)"
-    except FileNotFoundError: return "pyright not installed. Run: npm install -g pyright"
-    except Exception as e: return f"pyright error: {e}"
+    except FileNotFoundError:
+        return "pyright not installed. Run: npm install -g pyright"
+    except Exception as e:
+        return f"pyright error: {e}"
+
 
 @registry.register(description="Write content to a file (auto-stages changes for git)")
 def write_file(filepath: str, content: str) -> str:
@@ -210,14 +300,17 @@ def write_file(filepath: str, content: str) -> str:
     fp = os.path.expanduser(filepath)
     before = ""
     if os.path.exists(fp):
-        with open(fp) as f: before = f.read()
-    with open(fp, "w") as f: f.write(content)
+        with open(fp) as f:
+            before = f.read()
+    with open(fp, "w") as f:
+        f.write(content)
     diff = ""
     if before and before != content:
         diff = _git_diff(filepath)
     _git_stage(fp)
-    _push_stream({"type":"file_written","filepath":filepath})
+    _push_stream({"type": "file_written", "filepath": filepath})
     return f"Written to {filepath}"
+
 
 @registry.register(description="Append content to a file (auto-stages changes)")
 def append_file(filepath: str, content: str) -> str:
@@ -226,59 +319,77 @@ def append_file(filepath: str, content: str) -> str:
     fp = os.path.expanduser(filepath)
     before = ""
     if os.path.exists(fp):
-        with open(fp) as f: before = f.read()
-    with open(fp, "a") as f: f.write(content)
+        with open(fp) as f:
+            before = f.read()
+    with open(fp, "a") as f:
+        f.write(content)
     _git_stage(fp)
-    _push_stream({"type":"file_written","filepath":filepath})
+    _push_stream({"type": "file_written", "filepath": filepath})
     return f"Appended to {filepath}"
+
 
 @registry.register(description="Edit file by replacing exact string match. Like sed but safe. Staged for git.")
 def edit_file_line(filepath: str, old_string: str, new_string: str) -> str:
     fp = os.path.expanduser(filepath)
-    if not os.path.exists(fp): return f"Error: file not found: {fp}"
-    with open(fp) as f: content = f.read()
-    if old_string not in content: return f"Error: old_string not found in {filepath}"
+    if not os.path.exists(fp):
+        return f"Error: file not found: {fp}"
+    with open(fp) as f:
+        content = f.read()
+    if old_string not in content:
+        return f"Error: old_string not found in {filepath}"
     new_content = content.replace(old_string, new_string, 1)
-    with open(fp, "w") as f: f.write(new_content)
+    with open(fp, "w") as f:
+        f.write(new_content)
     _git_stage(fp)
-    _push_stream({"type":"file_edited","filepath":filepath,"old":old_string[:40],"new":new_string[:40]})
+    _push_stream({"type": "file_edited", "filepath": filepath, "old": old_string[:40], "new": new_string[:40]})
     return f"Edited {filepath}"
+
 
 @registry.register(description="Preview uncommitted git diff (unified format). Best called BEFORE write_file to show what will change.")
 def git_diff_preview(path: str = "") -> str:
     return _git_diff(path)
+
 
 @registry.register(description="Show git status — tracked/untracked/modified files")
 def git_status() -> str:
     try:
         r = subprocess.run(["git", "status", "--short"], capture_output=True, text=True)
         return r.stdout or "(clean)"
-    except Exception as e: return f"git status error: {e}"
+    except Exception as e:
+        return f"git status error: {e}"
+
 
 @registry.register(description="Stage all changes and commit with a message. If empty, auto-generates from diff.")
 def git_commit(message: str = "") -> str:
     try:
         r = subprocess.run(["git", "add", "-A"], capture_output=True, text=True)
-        if r.returncode != 0: return f"git add failed: {r.stderr}"
+        if r.returncode != 0:
+            return f"git add failed: {r.stderr}"
         if not message:
             diff = _git_diff()
-            if diff == "(no diff)": return "Nothing to commit."
+            if diff == "(no diff)":
+                return "Nothing to commit."
             lines = diff.split("\n")[:5]
             message = f"auto: {lines[0] if lines else 'update'}"
         r2 = subprocess.run(["git", "commit", "-m", message], capture_output=True, text=True)
         return r2.stdout or r2.stderr or "Committed."
-    except Exception as e: return f"git commit error: {e}"
+    except Exception as e:
+        return f"git commit error: {e}"
+
 
 @registry.register(description="Undo last changes: revert uncommitted changes in working tree.")
 def git_undo() -> str:
     try:
         r = subprocess.run(["git", "checkout", "--", "."], capture_output=True, text=True)
         return r.stdout or r.stderr or "Undone: working tree clean."
-    except Exception as e: return f"git undo error: {e}"
+    except Exception as e:
+        return f"git undo error: {e}"
+
 
 @registry.register(description="Run LSP diagnostics (Python: pyright) on a file or project. Returns errors/warnings.")
 def lsp_diagnostics(target: str = ".") -> str:
     return _pyright_diagnostics(target)
+
 
 @registry.register(description="Run a shell command. Streams output live. Use use_docker=false for local execution.")
 def run_command(command: str, working_dir: str = "", use_docker: str = "false", image: str = "python:3.12-slim") -> str:
@@ -295,12 +406,13 @@ def run_command(command: str, working_dir: str = "", use_docker: str = "false", 
     try:
         proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=working_dir or None, timeout=120)
         output = proc.stdout + proc.stderr
-        _push_stream({"type":"stream","line":output[-2000:] if len(output) > 2000 else output})
+        _push_stream({"type": "stream", "line": output[-2000:] if len(output) > 2000 else output})
         return output or f"Exit code: {proc.returncode}"
     except subprocess.TimeoutExpired:
         return f"Command timed out after 120s: {command[:80]}"
     except Exception as e:
         return f"Error: {e}"
+
 
 @registry.register(description="Ripgrep-powered code search. Supports regex, file filters, case-insensitive. Returns file:line:content.")
 def grep(pattern: str, path: str = ".", include: str = "", ignore_case: str = "false", max_results: str = "50") -> str:
@@ -316,18 +428,16 @@ def grep(pattern: str, path: str = ".", include: str = "", ignore_case: str = "f
         result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=15)
         lines = result.stdout.strip().split("\n") if result.stdout.strip() else []
         if len(lines) > int(max_results):
-            lines = lines[:int(max_results)] + [f"... ({len(lines) - int(max_results)} more matches)"]
+            lines = lines[: int(max_results)] + [f"... ({len(lines) - int(max_results)} more matches)"]
         return "\n".join(lines) if lines else "No matches."
     except FileNotFoundError:
-        fallback = subprocess.run(
-            f'grep -r -n "{pattern}" {path} 2>/dev/null | head -{max_results}',
-            shell=True, capture_output=True, text=True
-        )
+        fallback = subprocess.run(f'grep -r -n "{pattern}" {path} 2>/dev/null | head -{max_results}', shell=True, capture_output=True, text=True)
         return fallback.stdout.strip() or "No matches (ripgrep not installed)."
     except subprocess.TimeoutExpired:
         return "Search timed out (>15s). Try a narrower path or pattern."
     except Exception as e:
         return f"Search error: {e}"
+
 
 @registry.register(description="Rename a symbol across all files in the project. Performs safe text replacement.")
 def rename_symbol(old_name: str, new_name: str, path: str = ".", include: str = "") -> str:
@@ -339,10 +449,7 @@ def rename_symbol(old_name: str, new_name: str, path: str = ".", include: str = 
         result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=15)
         files = [f for f in result.stdout.strip().split("\n") if f]
     except FileNotFoundError:
-        fallback = subprocess.run(
-            f'grep -r -l -w "{old_name}" {path} 2>/dev/null',
-            shell=True, capture_output=True, text=True
-        )
+        fallback = subprocess.run(f'grep -r -l -w "{old_name}" {path} 2>/dev/null', shell=True, capture_output=True, text=True)
         files = [f for f in fallback.stdout.strip().split("\n") if f]
     except Exception as e:
         return f"Search error: {e}"
@@ -352,9 +459,9 @@ def rename_symbol(old_name: str, new_name: str, path: str = ".", include: str = 
     for filepath in files:
         try:
             content = Path(filepath).read_text(encoding="utf-8", errors="ignore")
-            count = len(re.findall(r'\b' + re.escape(old_name) + r'\b', content))
+            count = len(re.findall(r"\b" + re.escape(old_name) + r"\b", content))
             if count > 0:
-                new_content = re.sub(r'\b' + re.escape(old_name) + r'\b', new_name, content)
+                new_content = re.sub(r"\b" + re.escape(old_name) + r"\b", new_name, content)
                 Path(filepath).write_text(new_content, encoding="utf-8")
                 changed.append(f"{filepath} ({count} occurrences)")
         except Exception as e:
@@ -362,6 +469,7 @@ def rename_symbol(old_name: str, new_name: str, path: str = ".", include: str = 
     summary = f"Renamed '{old_name}' → '{new_name}' in {len(changed)} files:\n"
     summary += "\n".join(f"  {c}" for c in changed)
     return summary
+
 
 @registry.register(description="Explain a code snippet — describes what it does, inputs, outputs, and side effects.")
 def explain_code(code: str) -> str:
@@ -381,11 +489,16 @@ def explain_code(code: str) -> str:
     has_print = any("print(" in l for l in lines)
     has_yield = any("yield " in l for l in lines)
     side_effects = []
-    if has_print: side_effects.append("prints to stdout")
-    if has_yield: side_effects.append("is a generator")
-    if any("open(" in l for l in lines): side_effects.append("reads/writes files")
-    if any("subprocess" in l or "os.system" in l for l in lines): side_effects.append("runs external commands")
-    if any("requests." in l for l in lines): side_effects.append("makes HTTP requests")
+    if has_print:
+        side_effects.append("prints to stdout")
+    if has_yield:
+        side_effects.append("is a generator")
+    if any("open(" in l for l in lines):
+        side_effects.append("reads/writes files")
+    if any("subprocess" in l or "os.system" in l for l in lines):
+        side_effects.append("runs external commands")
+    if any("requests." in l for l in lines):
+        side_effects.append("makes HTTP requests")
     if side_effects:
         findings.append(f"Side effects: {', '.join(side_effects)}")
     if has_return:
@@ -393,6 +506,7 @@ def explain_code(code: str) -> str:
         if returns:
             findings.append(f"Returns: {returns[0].strip()[:100]}")
     return "\n".join(findings)
+
 
 @registry.register(description="Review code for bugs, security issues, and improvements. Returns structured findings.")
 def review_code(code: str, filepath: str = "") -> str:
@@ -425,6 +539,7 @@ def review_code(code: str, filepath: str = "") -> str:
     header = f"Code review for {filepath or '<snippet>'} ({len(lines)} lines, {len(findings)} findings)"
     return header + "\n" + "\n".join(findings)
 
+
 @registry.register(description="Suggest safe refactorings for code: extract functions, simplify conditionals, reduce nesting.")
 def refactor_code(code: str) -> str:
     lines = code.strip().split("\n")
@@ -438,28 +553,32 @@ def refactor_code(code: str) -> str:
         if stripped.startswith(("if ", "for ", "while ", "with ", "try:", "except")):
             depth = max(depth, line.count("    ") + 1)
         if stripped.startswith("def ") and i > 10:
-            prev = lines[max(0, i-10):i]
+            prev = lines[max(0, i - 10) : i]
             if any(l.strip().startswith(("if ", "for ")) for l in prev):
                 suggestions.append(f"L{i}: Consider extracting the logic before '{stripped[:50]}' into a helper function")
     if depth > 4:
         suggestions.append(f"Nesting depth {depth} detected — consider extracting inner blocks into functions")
     if func_count == 0 and len(lines) > 30:
         suggestions.append("No functions defined in 30+ lines — consider extracting reusable blocks into functions")
-    long_lines = [(i+1, l) for i, l in enumerate(lines) if len(l.strip()) > 100 and not l.strip().startswith("#")]
+    long_lines = [(i + 1, l) for i, l in enumerate(lines) if len(l.strip()) > 100 and not l.strip().startswith("#")]
     if long_lines:
         suggestions.append(f"{len(long_lines)} lines exceed 100 chars — consider breaking them up")
     if not suggestions:
         suggestions.append("Code looks clean — no refactoring suggestions.")
     return f"Refactoring suggestions ({len(suggestions)}):\n" + "\n".join(f"  • {s}" for s in suggestions)
 
+
 @registry.register(description="Execute Python code in a sandbox")
 def execute_python(code: str) -> str:
     with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(code); f.flush()
+        f.write(code)
+        f.flush()
         try:
             result = subprocess.run(["python", f.name], capture_output=True, text=True, timeout=10)
-            return (result.stdout + result.stderr)
-        finally: os.unlink(f.name)
+            return result.stdout + result.stderr
+        finally:
+            os.unlink(f.name)
+
 
 @registry.register(description="Execute a command inside a Docker container")
 def docker_execute(image: str = "python:3.12-slim", command: str = "python3 --version", workdir: str = "/workspace") -> str:
@@ -469,30 +588,40 @@ def docker_execute(image: str = "python:3.12-slim", command: str = "python3 --ve
     try:
         result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
         return (result.stdout + result.stderr) or "(no output)"
-    except subprocess.TimeoutExpired: return "Docker command timed out."
-    except Exception as e: return f"Docker error: {e}"
+    except subprocess.TimeoutExpired:
+        return "Docker command timed out."
+    except Exception as e:
+        return f"Docker error: {e}"
+
 
 @registry.register(description="Fetch a web page")
 def web_fetch(url: str) -> str:
     try:
         import requests
+
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Hermes-Ultimate/1.0"})
         return resp.text[:8000]
-    except Exception as e: return f"Fetch error: {e}"
+    except Exception as e:
+        return f"Fetch error: {e}"
+
 
 @registry.register(description="Search the web using DuckDuckGo")
 def web_search(query: str) -> str:
     try:
         import requests
+
         resp = requests.get(f"https://api.duckduckgo.com/?q={query}&format=json", timeout=10)
         data = resp.json()
         results = data.get("RelatedTopics", [])[:5]
         return json.dumps([r.get("Text", r.get("Result", "")) for r in results], indent=2)
-    except Exception as e: return f"Search error: {e}"
+    except Exception as e:
+        return f"Search error: {e}"
+
 
 @registry.register(description="Get current timestamp")
 def get_time() -> str:
     return datetime.now().isoformat()
+
 
 @registry.register(description="Map the repository structure — returns file tree and language stats.")
 def map_repo(path: str = ".") -> str:
@@ -510,18 +639,25 @@ def map_repo(path: str = ".") -> str:
                 lang[ext] = lang.get(ext, 0) + 1
         langs = ", ".join(sorted(f"{k} ({v})" for k, v in lang.items() if v > 1))
         return f"**{root.name}** ({len(tree)} files)\nLangs: {langs}\n" + "\n".join(tree[:200])
-    except Exception as e: return f"map error: {e}"
+    except Exception as e:
+        return f"map error: {e}"
+
 
 @registry.register(description="Process an image file — returns base64 data for LLM vision.")
 def process_image(filepath: str) -> str:
     try:
         fp = os.path.expanduser(filepath)
-        if not os.path.exists(fp): return f"Error: file not found: {fp}"
+        if not os.path.exists(fp):
+            return f"Error: file not found: {fp}"
         import base64
-        with open(fp, "rb") as f: b64 = base64.b64encode(f.read()).decode()
+
+        with open(fp, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
         ext = Path(fp).suffix.lower()
         return f"data:image/{ext[1:] if ext else 'png'};base64,{b64[:50000]}"
-    except Exception as e: return f"process_image error: {e}"
+    except Exception as e:
+        return f"process_image error: {e}"
+
 
 @registry.register(description="Call an MCP server tool. Pass server name, tool name, and arguments as JSON string.")
 def mcp_call(server: str, tool: str, arguments: str = "{}") -> str:
@@ -530,55 +666,65 @@ def mcp_call(server: str, tool: str, arguments: str = "{}") -> str:
     except Exception as e:
         return f"mcp call error: {e}"
 
+
 @registry.register(description="Test a provider connection by sending a tiny prompt. Returns latency and model info.")
 def test_provider(provider: str = "") -> str:
     target = provider or LLM_PROVIDER
     try:
         cfg = PROVIDER_CONFIGS.get(target)
-        if not cfg: return f"Unknown provider: {target}"
+        if not cfg:
+            return f"Unknown provider: {target}"
         api_key = os.getenv(cfg["env"]) if cfg.get("env") else None
         if cfg.get("env") and not api_key:
             return f"{target}: NO API KEY (set {cfg['env']})"
         t0 = time.time()
         client = _get_provider_client(target)
         model = cfg.get("default_model", "gpt-4o-mini")
-        resp = client.chat.completions.create(model=model, messages=[{"role":"user","content":"say ok"}], max_tokens=10)
+        resp = client.chat.completions.create(model=model, messages=[{"role": "user", "content": "say ok"}], max_tokens=10)
         lat = round(time.time() - t0, 2)
-        return f"{target}: OK ({lat}s) via {cfg.get('default_model','?')}"
+        return f"{target}: OK ({lat}s) via {cfg.get('default_model', '?')}"
     except Exception as e:
         return f"{target}: FAIL ({e})"
 
+
 # ============== NEW TOOLS: Git Branch, File Explorer, Suggest/Approve ==============
 
-_pending_writes: Dict[str, Dict] = {}
+_pending_writes: dict[str, dict] = {}
+
 
 @registry.register(description="Push committed changes to remote. Specify branch (default: current).")
 def git_push(branch: str = "") -> str:
     try:
-        target = branch or subprocess.run(["git","rev-parse","--abbrev-ref","HEAD"], capture_output=True, text=True).stdout.strip()
-        r = subprocess.run(["git","push","origin", target], capture_output=True, text=True, cwd=os.getcwd())
+        target = branch or subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
+        r = subprocess.run(["git", "push", "origin", target], capture_output=True, text=True, cwd=os.getcwd())
         return f"Pushed {target}: {r.stdout.strip() or r.stderr.strip() or 'OK'}"
-    except Exception as e: return f"git_push error: {e}"
+    except Exception as e:
+        return f"git_push error: {e}"
+
 
 @registry.register(description="List branches, create new branch, or switch branch.")
 def git_branch(name: str = "", switch: str = "false") -> str:
     try:
         if name:
-            r = subprocess.run(["git","branch", name], capture_output=True, text=True, cwd=os.getcwd())
+            r = subprocess.run(["git", "branch", name], capture_output=True, text=True, cwd=os.getcwd())
             if switch.lower() == "true":
-                r2 = subprocess.run(["git","checkout", name], capture_output=True, text=True, cwd=os.getcwd())
+                r2 = subprocess.run(["git", "checkout", name], capture_output=True, text=True, cwd=os.getcwd())
                 return f"Created and switched to {name}: {r2.stdout.strip() or r2.stderr.strip() or 'OK'}"
             return f"Created branch {name}: {r.stdout.strip() or r.stderr.strip() or 'OK'}"
-        r = subprocess.run(["git","branch","-a"], capture_output=True, text=True, cwd=os.getcwd())
+        r = subprocess.run(["git", "branch", "-a"], capture_output=True, text=True, cwd=os.getcwd())
         return r.stdout.strip() or "(no branches)"
-    except Exception as e: return f"git_branch error: {e}"
+    except Exception as e:
+        return f"git_branch error: {e}"
+
 
 @registry.register(description="Show git log (last N commits with stats).")
 def git_log(n: str = "10") -> str:
     try:
-        r = subprocess.run(["git","log",f"--oneline","--stat","-n", str(n)], capture_output=True, text=True, cwd=os.getcwd())
+        r = subprocess.run(["git", "log", "--oneline", "--stat", "-n", str(n)], capture_output=True, text=True, cwd=os.getcwd())
         return r.stdout.strip() or "(no commits)"
-    except Exception as e: return f"git_log error: {e}"
+    except Exception as e:
+        return f"git_log error: {e}"
+
 
 @registry.register(description="List files and directories at a path. Returns JSON tree.")
 def list_files(path: str = ".", max_depth: str = "3") -> str:
@@ -586,23 +732,31 @@ def list_files(path: str = ".", max_depth: str = "3") -> str:
         root = Path(path).resolve()
         result = {"name": root.name, "type": "dir", "children": []}
         depth = int(max_depth)
+
         def _scan(d: Path, current_depth: int):
-            if current_depth >= depth: return []
+            if current_depth >= depth:
+                return []
             children = []
             try:
                 for item in sorted(d.iterdir()):
-                    if item.name.startswith(".") and item.name not in (".github", ".env.example"): continue
-                    if item.name in ("node_modules", "__pycache__", "target", ".git", "dist", "build"): continue
+                    if item.name.startswith(".") and item.name not in (".github", ".env.example"):
+                        continue
+                    if item.name in ("node_modules", "__pycache__", "target", ".git", "dist", "build"):
+                        continue
                     if item.is_dir():
                         children.append({"name": item.name, "type": "dir", "children": _scan(item, current_depth + 1)})
                     else:
                         size = item.stat().st_size
                         children.append({"name": item.name, "type": "file", "size": size})
-            except PermissionError: pass
+            except PermissionError:
+                pass
             return children
+
         result["children"] = _scan(root, 0)
         return json.dumps(result, indent=2)
-    except Exception as e: return f"list_files error: {e}"
+    except Exception as e:
+        return f"list_files error: {e}"
+
 
 @registry.register(description="Suggest a file write for user approval. Returns diff preview. User must confirm with confirm_write.")
 def suggest_write(filepath: str, content: str) -> str:
@@ -610,19 +764,23 @@ def suggest_write(filepath: str, content: str) -> str:
         p = Path(filepath)
         old_content = p.read_text() if p.exists() else ""
         import difflib
+
         old_lines = old_content.splitlines(keepends=True)
         new_lines = content.splitlines(keepends=True)
         diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{filepath}", tofile=f"b/{filepath}", lineterm=""))
         diff_text = "\n".join(diff_lines) if diff_lines else "(no changes)"
-        write_id = f"w-{int(time.time()*1000)}"
+        write_id = f"w-{int(time.time() * 1000)}"
         _pending_writes[write_id] = {"filepath": filepath, "content": content}
         return json.dumps({"id": write_id, "filepath": filepath, "diff": diff_text, "status": "pending_approval"})
-    except Exception as e: return f"suggest_write error: {e}"
+    except Exception as e:
+        return f"suggest_write error: {e}"
+
 
 @registry.register(description="Confirm and execute a pending file write (from suggest_write). Pass the write ID.")
 def confirm_write(write_id: str) -> str:
     pending = _pending_writes.get(write_id)
-    if not pending: return f"No pending write with id {write_id}"
+    if not pending:
+        return f"No pending write with id {write_id}"
     filepath = pending["filepath"]
     content = pending["content"]
     del _pending_writes[write_id]
@@ -630,9 +788,11 @@ def confirm_write(write_id: str) -> str:
         p = Path(filepath)
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-        subprocess.run(["git","add", filepath], capture_output=True, text=True)
+        subprocess.run(["git", "add", filepath], capture_output=True, text=True)
         return f"Written {filepath} ({len(content)} chars)"
-    except Exception as e: return f"confirm_write error: {e}"
+    except Exception as e:
+        return f"confirm_write error: {e}"
+
 
 @registry.register(description="Discard a pending file write (from suggest_write).")
 def deny_write(write_id: str) -> str:
@@ -642,9 +802,10 @@ def deny_write(write_id: str) -> str:
     return f"No pending write with id {write_id}"
 
 
-_bg_processes: Dict[str, subprocess.Popen] = {}
-_bg_output: Dict[str, list] = {}
+_bg_processes: dict[str, subprocess.Popen] = {}
+_bg_output: dict[str, list] = {}
 _bg_counter = 0
+
 
 @registry.register(description="Run a command in the background. Returns a process ID for polling/killing.")
 def background_process(command: str, workdir: str = "") -> str:
@@ -652,20 +813,19 @@ def background_process(command: str, workdir: str = "") -> str:
     _bg_counter += 1
     pid = f"bg-{_bg_counter}"
     try:
-        proc = subprocess.Popen(
-            command, shell=True,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, cwd=workdir or None
-        )
+        proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=workdir or None)
         _bg_processes[pid] = proc
         _bg_output[pid] = []
+
         def _reader():
             for line in proc.stdout:
                 _bg_output[pid].append(line.rstrip("\n"))
+
         threading.Thread(target=_reader, daemon=True).start()
         return f"Started background process {pid}: {command}"
     except Exception as e:
         return f"Error starting background process: {e}"
+
 
 @registry.register(description="Get output from a background process. Pass pid from background_process.")
 def poll_process(pid: str) -> str:
@@ -676,7 +836,8 @@ def poll_process(pid: str) -> str:
     if proc.poll() is not None:
         del _bg_processes[pid]
         return f"{output}\n[exited with code {proc.returncode}]" if output else f"[exited with code {proc.returncode}]"
-    return output if output else f"[running, no output yet]"
+    return output if output else "[running, no output yet]"
+
 
 @registry.register(description="Kill a background process by its pid.")
 def kill_process(pid: str) -> str:
@@ -686,6 +847,7 @@ def kill_process(pid: str) -> str:
     proc.terminate()
     del _bg_processes[pid]
     return f"Terminated process {pid}"
+
 
 @registry.register(description="Run project linter and tests. Auto-detects Python (ruff+pytest) or Node (eslint+test).")
 def lint_and_test(path: str = ".") -> str:
@@ -721,6 +883,7 @@ def lint_and_test(path: str = ".") -> str:
             results.append("npm test: NOT AVAILABLE")
     return "\n\n".join(results) if results else f"No lint/test config found at {path}"
 
+
 @registry.register(description="Kanban task board tool. Actions: list, add, move, remove.")
 def task_board(action: str = "list", task_name: str = "", column: str = "") -> str:
     board = KanbanBoard()
@@ -736,6 +899,7 @@ def task_board(action: str = "list", task_name: str = "", column: str = "") -> s
         board.remove_task(task_name)
         return f"Removed task: {task_name}"
     return f"Unknown task action: {action}"
+
 
 @registry.register(description="Map repository structure: functions, classes, imports per file. Returns JSON symbol index.")
 def repo_map(path: str = ".") -> str:
@@ -759,7 +923,8 @@ def repo_map(path: str = ".") -> str:
             if any(syms.values()):
                 symbols[str(f.relative_to(p))] = syms
                 count += 1
-        except: pass
+        except:
+            pass
     return json.dumps(symbols, indent=1)[:10000]
 
 
@@ -787,7 +952,7 @@ class SelfHealer:
             return f"Unknown error pattern. Manual investigation needed. Context: {context[:200]}"
 
     @staticmethod
-    def auto_fix(tool_name: str, error: str, args: dict) -> Optional[Dict]:
+    def auto_fix(tool_name: str, error: str, args: dict) -> dict | None:
         """Attempt automatic fix for known error patterns. Returns fixed args or None."""
         error_lower = error.lower()
         if tool_name == "run_command" and "not found" in error_lower:
@@ -803,22 +968,34 @@ class SelfHealer:
                     return {"filepath": alt}
         return None
 
+
 # ============== SELF-LEARNER ==============
 class SelfLearner:
-    _recording = False; _recording_name = ""; _recording_description = ""; _action_log = []
+    _recording = False
+    _recording_name = ""
+    _recording_description = ""
+    _action_log = []
+
     @classmethod
     def start_recording(cls, name: str, description: str):
-        cls._recording = True; cls._recording_name = name; cls._recording_description = description
-        cls._action_log = []; print(f"Recording: '{name}'")
+        cls._recording = True
+        cls._recording_name = name
+        cls._recording_description = description
+        cls._action_log = []
+        print(f"Recording: '{name}'")
+
     @classmethod
     def record_action(cls, action_type: str, details: dict):
         if cls._recording:
-            cls._action_log.append({"step": len(cls._action_log)+1, "type": action_type, "details": details, "timestamp": datetime.now().isoformat()})
+            cls._action_log.append({"step": len(cls._action_log) + 1, "type": action_type, "details": details, "timestamp": datetime.now().isoformat()})
+
     @classmethod
     def stop_recording(cls, provider: str = "openai") -> str:
-        if not cls._recording: return "Not recording."
+        if not cls._recording:
+            return "Not recording."
         cls._recording = False
-        if not cls._action_log: return "No actions recorded."
+        if not cls._action_log:
+            return "No actions recorded."
         prompt = f"""Generate a reusable SKILL from these recorded tool calls.
 Description: "{cls._recording_description}"
 Actions: {json.dumps(cls._action_log, indent=2)}
@@ -840,41 +1017,58 @@ workflow:
 Replace ALL concrete values with {{placeholders}}. Return ONLY markdown."""
         try:
             skill_md = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider).content
-        except Exception as e:
+        except Exception:
             skill_md = f"---\nname: {cls._recording_name}\ndescription: {cls._recording_description}\n---\n{json.dumps(cls._action_log, indent=2)}"
         skill_path = SKILLS_DIR / f"{cls._recording_name}.md"
-        skill_path.write_text(skill_md); cls._action_log = []
+        skill_path.write_text(skill_md)
+        cls._action_log = []
         return f"Skill saved: {skill_path}\n{skill_md}"
+
     @classmethod
-    def compose_workflow(cls, skill_names: List[str], goal: str, provider: str = "openai") -> str:
+    def compose_workflow(cls, skill_names: list[str], goal: str, provider: str = "openai") -> str:
         """Chain multiple skills into a composed workflow."""
         skill_contents = []
         for name in skill_names:
             path = SKILLS_DIR / f"{name}.md"
-            if path.exists(): skill_contents.append(path.read_text())
-        if not skill_contents: return "No skills found."
+            if path.exists():
+                skill_contents.append(path.read_text())
+        if not skill_contents:
+            return "No skills found."
         prompt = f"""You have these skills: {json.dumps(skill_contents, indent=2)}
 Goal: {goal}
 Create a NEW composed workflow that chains these skills together, reusing their steps. Output SKILL.md format."""
         try:
             workflow = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider).content
-        except Exception as e: return f"Compose failed: {e}"
+        except Exception as e:
+            return f"Compose failed: {e}"
         path = SKILLS_DIR / f"composed_{int(time.time())}.md"
         path.write_text(workflow)
         return f"Composed workflow saved: {path}\n{workflow}"
+
     @staticmethod
     def save_skill(name: str, description: str, workflow: list):
         SKILLS_DIR.mkdir(parents=True, exist_ok=True)
         (SKILLS_DIR / f"{name}.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n{json.dumps(workflow, indent=2)}")
+
     @staticmethod
-    def load_skills() -> list: return [f.stem for f in SKILLS_DIR.glob("*.md")]
+    def load_skills() -> list:
+        return [f.stem for f in SKILLS_DIR.glob("*.md")]
+
 
 # ============== HOOKS / LIFECYCLE SYSTEM ==============
 class HookManager:
     """Lifecycle hook system. Register callbacks for tool pre/post, LLM pre/post, etc."""
-    _hooks: Dict[str, List[Callable]] = {
-        "pre_tool": [], "post_tool": [], "pre_llm": [], "post_llm": [],
-        "pre_commit": [], "post_commit": [], "on_error": [], "on_start": [], "on_stop": [],
+
+    _hooks: dict[str, list[Callable]] = {
+        "pre_tool": [],
+        "post_tool": [],
+        "pre_llm": [],
+        "post_llm": [],
+        "pre_commit": [],
+        "post_commit": [],
+        "on_error": [],
+        "on_start": [],
+        "on_stop": [],
     }
 
     @classmethod
@@ -888,7 +1082,7 @@ class HookManager:
             cls._hooks[event].remove(callback)
 
     @classmethod
-    def fire(cls, event: str, **kwargs) -> List[Any]:
+    def fire(cls, event: str, **kwargs) -> list[Any]:
         results = []
         for cb in cls._hooks.get(event, []):
             try:
@@ -899,12 +1093,14 @@ class HookManager:
         return results
 
     @classmethod
-    def list_hooks(cls) -> Dict[str, int]:
+    def list_hooks(cls) -> dict[str, int]:
         return {event: len(cbs) for event, cbs in cls._hooks.items()}
+
 
 # ============== FILE WATCHER ==============
 class FileWatcher:
     """Watches the project directory for changes and auto-reindexes."""
+
     _observer = None
     _indexer = None
     _debounce_seconds = 2.0
@@ -914,8 +1110,8 @@ class FileWatcher:
     @classmethod
     def start(cls, indexer=None, path: str = "."):
         try:
-            from watchdog.observers import Observer
             from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
         except ImportError:
             return "watchdog not installed — file watcher disabled"
         if cls._observer and cls._observer.is_alive():
@@ -926,8 +1122,10 @@ class FileWatcher:
         class ChangeHandler(FileSystemEventHandler):
             def on_modified(self, event):
                 cls._track(event.src_path)
+
             def on_created(self, event):
                 cls._track(event.src_path)
+
             def on_deleted(self, event):
                 cls._track(event.src_path)
 
@@ -940,7 +1138,6 @@ class FileWatcher:
 
     @classmethod
     def _track(cls, filepath: str):
-        from watchdog.events import FileSystemEventHandler
         _IGNORED = {".git", "__pycache__", "node_modules", ".hermes", ".pytest_cache", "dist", "build", ".venv"}
         parts = Path(filepath).parts
         if any(p in _IGNORED for p in parts):
@@ -966,6 +1163,7 @@ class FileWatcher:
     def status(cls) -> dict:
         running = cls._observer is not None and cls._observer.is_alive()
         return {"running": running, "pending_changes": len(cls._changed_files)}
+
 
 # ============== CHECKPOINT SYSTEM ==============
 class CheckpointManager:
@@ -1003,10 +1201,11 @@ class CheckpointManager:
             if diff.stdout:
                 (cp_dir / "snapshot.diff").write_text(diff.stdout)
             return f"Checkpoint created: {tag} ({meta['files_changed']} files, working tree untouched)"
-        except Exception as e: return f"Checkpoint error: {e}"
+        except Exception as e:
+            return f"Checkpoint error: {e}"
 
     @staticmethod
-    def list_checkpoints() -> List[Dict]:
+    def list_checkpoints() -> list[dict]:
         """List all checkpoints."""
         checkpoints = []
         for cp_dir in sorted(CHECKPOINTS_DIR.iterdir()):
@@ -1031,7 +1230,8 @@ class CheckpointManager:
                 return f"Restored checkpoint: {label}\n{r.stdout.strip()}"
             else:
                 return f"Restore failed: {r.stderr.strip()}"
-        except Exception as e: return f"Restore error: {e}"
+        except Exception as e:
+            return f"Restore error: {e}"
 
     @staticmethod
     def delete_checkpoint(label: str) -> str:
@@ -1042,12 +1242,13 @@ class CheckpointManager:
             return f"Deleted checkpoint: {label}"
         return f"Checkpoint not found: {label}"
 
+
 # ============== CODEBASE INDEXER ==============
 class CodebaseIndexer:
     """Lightweight codebase indexing for semantic search. Uses file hashing + keyword matching."""
 
     def __init__(self):
-        self.index: Dict[str, Dict] = {}  # filepath -> {hash, keywords, size, ext}
+        self.index: dict[str, dict] = {}  # filepath -> {hash, keywords, size, ext}
         self.index_path = CHECKPOINTS_DIR / "codebase_index.json"
         self._load_index()
 
@@ -1055,28 +1256,34 @@ class CodebaseIndexer:
         if self.index_path.exists():
             try:
                 self.index = json.loads(self.index_path.read_text())
-            except: self.index = {}
+            except:
+                self.index = {}
 
     def _save_index(self):
         self.index_path.write_text(json.dumps(self.index, indent=2))
 
-    def _extract_keywords(self, content: str, ext: str) -> List[str]:
+    def _extract_keywords(self, content: str, ext: str) -> list[str]:
         """Extract meaningful keywords from source code."""
         keywords = set()
         # Remove strings and comments for cleaner extraction
         content_lower = content.lower()
         # Extract function/class/variable names
         patterns = [
-            r'def\s+(\w+)', r'class\s+(\w+)', r'function\s+(\w+)',
-            r'const\s+(\w+)', r'let\s+(\w+)', r'var\s+(\w+)',
-            r'import\s+.*from\s+["\']([^"\']+)', r'require\s*\(\s*["\']([^"\']+)',
+            r"def\s+(\w+)",
+            r"class\s+(\w+)",
+            r"function\s+(\w+)",
+            r"const\s+(\w+)",
+            r"let\s+(\w+)",
+            r"var\s+(\w+)",
+            r'import\s+.*from\s+["\']([^"\']+)',
+            r'require\s*\(\s*["\']([^"\']+)',
         ]
         for pat in patterns:
             for match in re.finditer(pat, content):
                 keywords.add(match.group(1).lower())
         # Add common programming terms
-        for word in re.findall(r'\b[a-z_]\w{3,}\b', content_lower):
-            if word not in ('self', 'this', 'that', 'with', 'from', 'import', 'return', 'true', 'false', 'none'):
+        for word in re.findall(r"\b[a-z_]\w{3,}\b", content_lower):
+            if word not in ("self", "this", "that", "with", "from", "import", "return", "true", "false", "none"):
                 keywords.add(word)
         return list(keywords)[:100]  # Cap at 100 keywords
 
@@ -1086,38 +1293,58 @@ class CodebaseIndexer:
         indexed = 0
         skipped = 0
         for f in root.rglob("*"):
-            if f.is_file() and f.suffix in ('.py', '.js', '.ts', '.tsx', '.jsx', '.go', '.rs', '.java', '.rb', '.php', '.c', '.cpp', '.h', '.md', '.json', '.yaml', '.yml', '.toml'):
-                if '.git' in f.parts or 'node_modules' in f.parts or '__pycache__' in f.parts:
+            if f.is_file() and f.suffix in (
+                ".py",
+                ".js",
+                ".ts",
+                ".tsx",
+                ".jsx",
+                ".go",
+                ".rs",
+                ".java",
+                ".rb",
+                ".php",
+                ".c",
+                ".cpp",
+                ".h",
+                ".md",
+                ".json",
+                ".yaml",
+                ".yml",
+                ".toml",
+            ):
+                if ".git" in f.parts or "node_modules" in f.parts or "__pycache__" in f.parts:
                     continue
                 try:
                     rel = str(f.relative_to(root))
-                    content = f.read_text(errors='ignore')
+                    content = f.read_text(errors="ignore")
                     file_hash = hashlib.md5(content.encode()).hexdigest()
                     # Check if changed
-                    if rel in self.index and self.index[rel].get('hash') == file_hash:
+                    if rel in self.index and self.index[rel].get("hash") == file_hash:
                         skipped += 1
                         continue
                     keywords = self._extract_keywords(content, f.suffix)
                     self.index[rel] = {
-                        'hash': file_hash,
-                        'keywords': keywords,
-                        'size': f.stat().st_size,
-                        'ext': f.suffix,
-                        'indexed_at': datetime.now().isoformat(),
+                        "hash": file_hash,
+                        "keywords": keywords,
+                        "size": f.stat().st_size,
+                        "ext": f.suffix,
+                        "indexed_at": datetime.now().isoformat(),
                     }
                     indexed += 1
-                except: pass
+                except:
+                    pass
         self._save_index()
         return f"Indexed {indexed} files, {skipped} unchanged. Total: {len(self.index)}"
 
-    def search(self, query: str, max_results: int = 10) -> List[Dict]:
+    def search(self, query: str, max_results: int = 10) -> list[dict]:
         """Search the index by keyword matching."""
         query_lower = query.lower()
-        query_words = set(re.findall(r'\b\w+\b', query_lower))
+        query_words = set(re.findall(r"\b\w+\b", query_lower))
         results = []
         for filepath, meta in self.index.items():
             score = 0
-            keywords = set(meta.get('keywords', []))
+            keywords = set(meta.get("keywords", []))
             # Exact filename match
             if query_lower in filepath.lower():
                 score += 10
@@ -1130,17 +1357,18 @@ class CodebaseIndexer:
                     if qw in kw or kw in qw:
                         score += 1
             if score > 0:
-                results.append({"path": filepath, "score": score, "ext": meta.get('ext', ''), "size": meta.get('size', 0)})
-        results.sort(key=lambda x: x['score'], reverse=True)
+                results.append({"path": filepath, "score": score, "ext": meta.get("ext", ""), "size": meta.get("size", 0)})
+        results.sort(key=lambda x: x["score"], reverse=True)
         return results[:max_results]
 
-    def get_stats(self) -> Dict:
+    def get_stats(self) -> dict:
         """Get index statistics."""
         exts = {}
         for meta in self.index.values():
-            ext = meta.get('ext', 'unknown')
+            ext = meta.get("ext", "unknown")
             exts[ext] = exts.get(ext, 0) + 1
         return {"total_files": len(self.index), "by_extension": exts}
+
 
 # ============== SAFETY MANAGER ==============
 class SafetyManager:
@@ -1148,30 +1376,40 @@ class SafetyManager:
 
     def __init__(self, mode: str = "suggest"):
         self.mode = mode  # suggest, plan, auto
-        self._pending_approvals: Dict[str, Dict] = {}
+        self._pending_approvals: dict[str, dict] = {}
 
-    def should_approve(self, tool_name: str, args: dict) -> Tuple[bool, str]:
+    def should_approve(self, tool_name: str, args: dict) -> tuple[bool, str]:
         """Check if tool execution needs user approval."""
         if self.mode == "auto":
             return True, "auto-mode"
 
         # Always allow read-only tools
-        READ_ONLY = {"read_file", "list_files", "grep", "git_status", "git_log",
-                      "git_diff_preview", "map_repo", "get_time", "lsp_diagnostics",
-                      "web_search", "web_fetch", "test_provider", "list_providers",
-                      "explain_code", "review_code", "refactor_code"}
+        READ_ONLY = {
+            "read_file",
+            "list_files",
+            "grep",
+            "git_status",
+            "git_log",
+            "git_diff_preview",
+            "map_repo",
+            "get_time",
+            "lsp_diagnostics",
+            "web_search",
+            "web_fetch",
+            "test_provider",
+            "list_providers",
+            "explain_code",
+            "review_code",
+            "refactor_code",
+        }
         if tool_name in READ_ONLY:
             return True, "read-only"
 
         # Destructive tools need approval in suggest/plan mode
-        DESTRUCTIVE = {"write_file", "edit_file_line", "append_file", "run_command",
-                       "docker_execute", "git_commit", "git_push", "git_undo"}
+        DESTRUCTIVE = {"write_file", "edit_file_line", "append_file", "run_command", "docker_execute", "git_commit", "git_push", "git_undo"}
         if tool_name in DESTRUCTIVE and self.mode in ("suggest", "plan"):
-            approval_id = f"appr-{int(time.time()*1000)}"
-            self._pending_approvals[approval_id] = {
-                "tool": tool_name, "args": args,
-                "timestamp": datetime.now().isoformat(), "status": "pending"
-            }
+            approval_id = f"appr-{int(time.time() * 1000)}"
+            self._pending_approvals[approval_id] = {"tool": tool_name, "args": args, "timestamp": datetime.now().isoformat(), "status": "pending"}
             return False, approval_id
 
         return True, "allowed"
@@ -1189,62 +1427,112 @@ class SafetyManager:
             return True
         return False
 
-    def get_pending(self) -> List[Dict]:
+    def get_pending(self) -> list[dict]:
         return [{"id": k, **v} for k, v in self._pending_approvals.items() if v["status"] == "pending"]
+
 
 class GoalManager:
     def __init__(self, goal: str):
-        self.goal = goal; self.history = []; self.completed = False
+        self.goal = goal
+        self.history = []
+        self.completed = False
+
     def is_complete(self, last_output: str) -> bool:
-        if "COMPLETE" in last_output.upper(): self.completed = True
+        if "COMPLETE" in last_output.upper():
+            self.completed = True
         return self.completed
+
 
 # ============== SUB-AGENT ==============
 class SubAgent:
     def __init__(self, name: str, task: str, parent_context: str = ""):
-        self.name = name; self.task = task; self.context = parent_context; self.result = None; self.status = "pending"
+        self.name = name
+        self.task = task
+        self.context = parent_context
+        self.result = None
+        self.status = "pending"
+
     def run(self, agent_core) -> str:
         self.status = "running"
-        self.result = agent_core.run_loop([{"role": "system", "content": agent_core.system_prompt}, {"role": "user", "content": f"Sub-task '{self.name}': {self.task}\nContext: {self.context}"}], max_iters=5)
-        self.status = "done"; return self.result
+        self.result = agent_core.run_loop(
+            [
+                {"role": "system", "content": agent_core.system_prompt},
+                {"role": "user", "content": f"Sub-task '{self.name}': {self.task}\nContext: {self.context}"},
+            ],
+            max_iters=5,
+        )
+        self.status = "done"
+        return self.result
+
 
 # ============== PARALLEL EXECUTOR ==============
 class ParallelExecutor:
     @staticmethod
-    def run(tasks: List[Dict], agent_core):
+    def run(tasks: list[dict], agent_core):
         results = {}
         with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
             futures = {executor.submit(SubAgent(t["name"], t["prompt"], str(t)).run, agent_core): t["name"] for t in tasks}
-            for future in as_completed(futures): results[futures[future]] = future.result()
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
         return results
+
 
 # ============== KANBAN ==============
 @dataclass
 class KanbanTask:
-    id: str; title: str; description: str; status: str = "todo"; assigned_to: str = None
-    retries: int = 0; max_retries: int = 3
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat()); agent_context: str = ""
+    id: str
+    title: str
+    description: str
+    status: str = "todo"
+    assigned_to: str = None
+    retries: int = 0
+    max_retries: int = 3
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    agent_context: str = ""
+
 
 class KanbanWorker:
     def __init__(self, name: str, worker_type: str):
-        self.name = name; self.type = worker_type; self.status = "idle"
-        self.current_task: Optional[KanbanTask] = None; self.last_heartbeat = datetime.now()
-    def heartbeat(self): self.last_heartbeat = datetime.now()
-    def assign(self, task: KanbanTask): self.current_task = task; self.status = "working"
+        self.name = name
+        self.type = worker_type
+        self.status = "idle"
+        self.current_task: KanbanTask | None = None
+        self.last_heartbeat = datetime.now()
+
+    def heartbeat(self):
+        self.last_heartbeat = datetime.now()
+
+    def assign(self, task: KanbanTask):
+        self.current_task = task
+        self.status = "working"
+
 
 class KanbanBoard:
     def __init__(self):
-        self.tasks: List[KanbanTask] = []; self.workers: List[KanbanWorker] = []; self.running = True
-        self._guardian = threading.Thread(target=self._guardian_loop, daemon=True); self._guardian.start()
+        self.tasks: list[KanbanTask] = []
+        self.workers: list[KanbanWorker] = []
+        self.running = True
+        self._guardian = threading.Thread(target=self._guardian_loop, daemon=True)
+        self._guardian.start()
+
     def add_task(self, title, desc="", context="") -> KanbanTask:
-        task = KanbanTask(id=f"t-{len(self.tasks)+1}", title=title, description=desc, agent_context=context)
-        self.tasks.append(task); return task
-    def add_worker(self, name, worker_type): self.workers.append(KanbanWorker(name, worker_type))
+        task = KanbanTask(id=f"t-{len(self.tasks) + 1}", title=title, description=desc, agent_context=context)
+        self.tasks.append(task)
+        return task
+
+    def add_worker(self, name, worker_type):
+        self.workers.append(KanbanWorker(name, worker_type))
+
     def assign_work(self):
         for task in self.tasks:
             if task.status == "todo":
                 for w in self.workers:
-                    if w.status == "idle": w.assign(task); task.status = "in_progress"; task.assigned_to = w.name; break
+                    if w.status == "idle":
+                        w.assign(task)
+                        task.status = "in_progress"
+                        task.assigned_to = w.name
+                        break
+
     def _guardian_loop(self):
         while self.running:
             time.sleep(10)
@@ -1253,108 +1541,188 @@ class KanbanBoard:
                 if (now - w.last_heartbeat).total_seconds() > 30 and w.status == "working":
                     print(f"Zombie worker: {w.name}")
                     if w.current_task:
-                        t = w.current_task; t.status = "todo"; t.retries += 1
-                        if t.retries > t.max_retries: t.status = "done"
-                    w.status = "idle"; w.current_task = None
+                        t = w.current_task
+                        t.status = "todo"
+                        t.retries += 1
+                        if t.retries > t.max_retries:
+                            t.status = "done"
+                    w.status = "idle"
+                    w.current_task = None
+
     def move_task(self, task_id: str, to_status: str) -> bool:
         for t in self.tasks:
-            if t.id == task_id and to_status in ("todo","in_progress","review","done"):
-                t.status = to_status; return True
+            if t.id == task_id and to_status in ("todo", "in_progress", "review", "done"):
+                t.status = to_status
+                return True
         return False
+
     def remove_task(self, task_id: str) -> bool:
         for i, t in enumerate(self.tasks):
-            if t.id == task_id: self.tasks.pop(i); return True
+            if t.id == task_id:
+                self.tasks.pop(i)
+                return True
         return False
+
     def get_board_state(self):
-        return {s: [{"id":t.id, "title":t.title, "status":t.status, "assigned_to":t.assigned_to, "retries":t.retries} for t in self.tasks if t.status==s] for s in ["todo","in_progress","review","done"]}
+        return {
+            s: [{"id": t.id, "title": t.title, "status": t.status, "assigned_to": t.assigned_to, "retries": t.retries} for t in self.tasks if t.status == s]
+            for s in ["todo", "in_progress", "review", "done"]
+        }
+
 
 # ============== SELF-VERIFIER ==============
 class SelfVerifier:
     @staticmethod
-    def verify_code(code: str, test_code: str) -> Dict:
+    def verify_code(code: str, test_code: str) -> dict:
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir,"code.py").write_text(code); Path(tmpdir,"test_code.py").write_text(test_code)
-            result = subprocess.run(["python","-m","pytest", tmpdir], capture_output=True, text=True)
-            return {"passed": result.returncode==0, "output": result.stdout+result.stderr}
+            Path(tmpdir, "code.py").write_text(code)
+            Path(tmpdir, "test_code.py").write_text(test_code)
+            result = subprocess.run(["python", "-m", "pytest", tmpdir], capture_output=True, text=True)
+            return {"passed": result.returncode == 0, "output": result.stdout + result.stderr}
+
 
 # ============== BROWSER ==============
 class AdvancedBrowser:
-    def __init__(self): self.page = None; self.browser = None
+    def __init__(self):
+        self.page = None
+        self.browser = None
+
     async def start(self):
         from playwright.async_api import async_playwright
-        p = await async_playwright().start(); self.browser = await p.chromium.launch(headless=False); self.page = await self.browser.new_page()
+
+        p = await async_playwright().start()
+        self.browser = await p.chromium.launch(headless=False)
+        self.page = await self.browser.new_page()
+
     async def goto(self, url: str):
-        if not self.page: await self.start()
-        await self.page.goto(url); return f"Navigated to {url}"
-    async def click(self, selector: str): await self.page.click(selector); return f"Clicked {selector}"
-    async def type_text(self, selector: str, text: str): await self.page.fill(selector, text); return f"Typed into {selector}"
-    async def screenshot(self, path: str = "browser.png"): await self.page.screenshot(path=path); return f"Screenshot: {path}"
+        if not self.page:
+            await self.start()
+        await self.page.goto(url)
+        return f"Navigated to {url}"
+
+    async def click(self, selector: str):
+        await self.page.click(selector)
+        return f"Clicked {selector}"
+
+    async def type_text(self, selector: str, text: str):
+        await self.page.fill(selector, text)
+        return f"Typed into {selector}"
+
+    async def screenshot(self, path: str = "browser.png"):
+        await self.page.screenshot(path=path)
+        return f"Screenshot: {path}"
+
     async def close(self):
-        if self.browser: await self.browser.close()
+        if self.browser:
+            await self.browser.close()
+
 
 # ============== DESKTOP ==============
 class DesktopController:
     @staticmethod
     def move_mouse(x: int, y: int):
-        try: import pyautogui; pyautogui.moveTo(x,y); return f"Moved to ({x},{y})"
-        except: return "PyAutoGUI not installed"
+        try:
+            import pyautogui
+
+            pyautogui.moveTo(x, y)
+            return f"Moved to ({x},{y})"
+        except:
+            return "PyAutoGUI not installed"
+
     @staticmethod
     def click():
-        try: import pyautogui; pyautogui.click(); return "Clicked"
-        except: return "PyAutoGUI not installed"
+        try:
+            import pyautogui
+
+            pyautogui.click()
+            return "Clicked"
+        except:
+            return "PyAutoGUI not installed"
+
     @staticmethod
     def type_text(text: str):
-        try: import pyautogui; pyautogui.write(text); return f"Typed: {text}"
-        except: return "PyAutoGUI not installed"
+        try:
+            import pyautogui
+
+            pyautogui.write(text)
+            return f"Typed: {text}"
+        except:
+            return "PyAutoGUI not installed"
+
     @staticmethod
     def press_key(key: str):
-        try: import pyautogui; pyautogui.press(key); return f"Pressed: {key}"
-        except: return "PyAutoGUI not installed"
+        try:
+            import pyautogui
+
+            pyautogui.press(key)
+            return f"Pressed: {key}"
+        except:
+            return "PyAutoGUI not installed"
+
     @staticmethod
     def open_app(app_name: str):
         import platform
+
         s = platform.system()
-        if s == "Darwin": subprocess.Popen(["open", "-a", app_name])
-        elif s == "Windows": subprocess.Popen(["start", app_name], shell=True)
-        else: subprocess.Popen(["xdg-open", app_name])
+        if s == "Darwin":
+            subprocess.Popen(["open", "-a", app_name])
+        elif s == "Windows":
+            subprocess.Popen(["start", app_name], shell=True)
+        else:
+            subprocess.Popen(["xdg-open", app_name])
         return f"Opened {app_name}"
+
 
 # ============== SESSION STORE ==============
 class SessionStore:
     def __init__(self, db_path: str = DB_FILE):
-        self.db_path = db_path; self._init_db()
+        self.db_path = db_path
+        self._init_db()
+
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, messages TEXT, updated_at TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, content TEXT, created_at TEXT)")
-    def load(self, session_id: str) -> Optional[List[Dict]]:
+
+    def load(self, session_id: str) -> list[dict] | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT messages FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
             return json.loads(row[0]) if row else None
-    def save(self, session_id: str, messages: List[Dict]):
+
+    def save(self, session_id: str, messages: list[dict]):
         now = datetime.now().isoformat()
         with sqlite3.connect(self.db_path) as conn:
             conn.execute("INSERT OR REPLACE INTO sessions (session_id, messages, updated_at) VALUES (?, ?, ?)", (session_id, json.dumps(messages), now))
-    def list_sessions(self) -> List[str]:
+
+    def list_sessions(self) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:
             return [r[0] for r in conn.execute("SELECT session_id FROM sessions ORDER BY updated_at DESC").fetchall()]
 
+
 # ============== CONTEXT COMPRESSION ==============
-def compress_messages(messages: List[Dict], keep_recent: int = 5, provider: str = "") -> List[Dict]:
-    if len(messages) <= 20: return messages
+def compress_messages(messages: list[dict], keep_recent: int = 5, provider: str = "") -> list[dict]:
+    if len(messages) <= 20:
+        return messages
     system_msg = messages.pop(0) if messages and messages[0]["role"] == "system" else None
-    middle = messages[3:-keep_recent]; recent = messages[-keep_recent:]
-    if not middle: return messages
-    prompt = "Summarize this conversation concisely:\n" + "\n".join([f"{m['role']}: {str(m.get('content',''))[:200]}" for m in middle])
+    middle = messages[3:-keep_recent]
+    recent = messages[-keep_recent:]
+    if not middle:
+        return messages
+    prompt = "Summarize this conversation concisely:\n" + "\n".join([f"{m['role']}: {str(m.get('content', ''))[:200]}" for m in middle])
     try:
         p = provider or LLM_PROVIDER
         summary = ProviderRouter.call([{"role": "user", "content": prompt}], [], p).content
-    except: summary = "[Conversation summarized]"
+    except:
+        summary = "[Conversation summarized]"
     compressed = messages[:3] + [{"role": "user", "content": f"[Summary]: {summary}"}] + recent
-    if system_msg: compressed.insert(0, system_msg)
+    if system_msg:
+        compressed.insert(0, system_msg)
     return compressed
 
+
 _MCP_SINGLETON = None
+
+
 def _mcp_client():
     global _MCP_SINGLETON
     if _MCP_SINGLETON is None:
@@ -1366,6 +1734,7 @@ def _plain_llm_call(provider: str, prompt: str) -> str:
     resp = ProviderRouter.call([{"role": "user", "content": prompt}], [], provider)
     return resp.content or ""
 
+
 def _vision_call(messages: list) -> str:
     provider = os.getenv("HERMES_VISION_PROVIDER", LLM_PROVIDER)
     cfg = PROVIDER_CONFIGS.get(provider, {})
@@ -1374,6 +1743,7 @@ def _vision_call(messages: list) -> str:
     resp = client.chat.completions.create(model=model, messages=messages, max_tokens=1000)
     return resp.choices[0].message.content or ""
 
+
 def _asr_call(audio_path: str) -> str:
     provider = os.getenv("HERMES_ASR_PROVIDER", "openai")
     client = _get_provider_client(provider)
@@ -1381,13 +1751,13 @@ def _asr_call(audio_path: str) -> str:
         resp = client.audio.transcriptions.create(model=os.getenv("HERMES_ASR_MODEL", "whisper-1"), file=fh)
     return resp.text
 
+
 def _tts_call(text: str) -> bytes:
     provider = os.getenv("HERMES_TTS_PROVIDER", "openai")
     client = _get_provider_client(provider)
-    resp = client.audio.speech.create(
-        model=os.getenv("HERMES_TTS_MODEL", "tts-1"), voice=os.getenv("HERMES_TTS_VOICE", "alloy"), input=text[:4000]
-    )
+    resp = client.audio.speech.create(model=os.getenv("HERMES_TTS_MODEL", "tts-1"), voice=os.getenv("HERMES_TTS_VOICE", "alloy"), input=text[:4000])
     return resp.content
+
 
 def _ctx_summarize(prompt: str) -> str:
     """Cheap LLM call used by the ContextEngine/judge for summaries. MUST go
@@ -1396,12 +1766,13 @@ def _ctx_summarize(prompt: str) -> str:
     resp = ProviderRouter.call([{"role": "user", "content": prompt}], [], LLM_PROVIDER)
     return resp.content or ""
 
+
 # ============== PLUGIN MARKETPLACE ==============
 class PluginMarketplace:
     PLUGIN_MANIFEST_FIELDS = {"name", "version", "description", "author", "tools", "min_agent_version"}
 
     @staticmethod
-    def discover_local() -> List[Dict]:
+    def discover_local() -> list[dict]:
         plugins = []
         for p in PLUGINS_DIR.iterdir():
             manifest = p / "plugin.json"
@@ -1411,7 +1782,8 @@ class PluginMarketplace:
                     if PluginMarketplace._validate_manifest(data):
                         data["path"] = str(p)
                         plugins.append(data)
-                except: pass
+                except:
+                    pass
         return plugins
 
     @staticmethod
@@ -1420,7 +1792,9 @@ class PluginMarketplace:
 
     @staticmethod
     def install_from_url(url: str, name: str = None) -> str:
-        import urllib.request, zipfile, io
+        import urllib.request
+        import zipfile
+
         try:
             resp = urllib.request.urlopen(url, timeout=30)
             zip_data = io.BytesIO(resp.read())
@@ -1438,12 +1812,12 @@ class PluginMarketplace:
             return f"Install failed: {e}"
 
     @staticmethod
-    def list_remote() -> List[Dict]:
+    def list_remote() -> list[dict]:
         # No public registry yet — return the truth, not mock entries.
         return []
 
     @staticmethod
-    def get_skill_versions(name: str) -> List[Dict]:
+    def get_skill_versions(name: str) -> list[dict]:
         skill_path = SKILLS_DIR / f"{name}.md"
         versions = []
         if skill_path.exists():
@@ -1451,21 +1825,26 @@ class PluginMarketplace:
             versions.append({"version": "local", "path": str(skill_path), "size": len(content)})
         return versions
 
+
 # ============== WEB SOCKET SERVER ==============
 # ============== ULTIMATE AGENT ==============
 class UltimateAgent:
     def __init__(self):
-        self.registry = registry; self.session_id = f"sess_{int(time.time())}"
-        self.store = SessionStore(); self.messages = []
-        self.goal_manager: Optional[GoalManager] = None; self.kanban = KanbanBoard()
-        self.browser = AdvancedBrowser(); self.desktop = DesktopController()
+        self.registry = registry
+        self.session_id = f"sess_{int(time.time())}"
+        self.store = SessionStore()
+        self.messages = []
+        self.goal_manager: GoalManager | None = None
+        self.kanban = KanbanBoard()
+        self.browser = AdvancedBrowser()
+        self.desktop = DesktopController()
         self.provider = LLM_PROVIDER
         self._provider_pinned = False
-        self.on_token: Optional[Callable[[str], None]] = None  # set by TUIs for live streaming
-        self.approve_fn: Optional[Callable[[str, dict, str], bool]] = None  # (tool, args, preview) -> approve?
-        self.convo: List[Dict] = []  # persistent multi-turn conversation for converse()
+        self.on_token: Callable[[str], None] | None = None  # set by TUIs for live streaming
+        self.approve_fn: Callable[[str, dict, str], bool] | None = None  # (tool, args, preview) -> approve?
+        self.convo: list[dict] = []  # persistent multi-turn conversation for converse()
         self.cancel_event = threading.Event()  # set to abort an in-flight run (TUI Ctrl-C / WS cancel)
-        self.logs: List[Dict] = []
+        self.logs: list[dict] = []
         self.safety = SafetyManager(SAFETY_MODE)
         self.checkpoints = CheckpointManager()
         self.indexer = CodebaseIndexer()
@@ -1503,16 +1882,20 @@ class UltimateAgent:
         self.changesets.attach(HookManager)
         self.tracker = CalibrationTracker(DB_FILE)
         self.router = CostAwareRouter(available_fn=_live_providers, tracker=self.tracker)
-        def _candidates(prompt: str, n: int) -> Dict[str, str]:
+
+        def _candidates(prompt: str, n: int) -> dict[str, str]:
             members = self.orchestra._committee_members(self.orchestra.classify(prompt), n)
             out = {}
             with ThreadPoolExecutor(max_workers=max(1, len(members))) as pool:
                 futures = {pool.submit(_plain_llm_call, m, prompt): m for m in members}
                 for future in as_completed(futures):
                     member = futures[future]
-                    try: out[member] = future.result()
-                    except Exception as e: out[member] = f"(failed: {e})"
+                    try:
+                        out[member] = future.result()
+                    except Exception as e:
+                        out[member] = f"(failed: {e})"
             return out
+
         self.max_mode = MaxMode(candidates_fn=_candidates, judge_fn=_ctx_summarize, tracker=self.tracker)
         HookManager.register("post_tool", self._record_tool_outcomes)
         skills = SelfLearner.load_skills()
@@ -1523,6 +1906,7 @@ class UltimateAgent:
             persona_str = f"\n{addendum}"
         self.system_prompt = f"You are Daedalus, an autonomous coding assistant powered by the Hermes Deep Mind engine with tools for files, shell, Docker, browser, and desktop. You can spawn sub-agents, verify code, and learn new skills. You have persistent cross-session memory: use the remember tool to store important facts, decisions, and user preferences, and recall_memory to search them. Be concise and self-correcting.{persona_str}{skills_str}"
         self._register_advanced_tools()
+
     def _preview_write(self, tool: str, args: dict) -> str:
         """Human-readable preview of a destructive tool call for approval."""
         try:
@@ -1531,10 +1915,9 @@ class UltimateAgent:
                 old = Path(path).read_text(errors="replace") if Path(path).exists() else ""
                 return _unified_diff(old, args.get("content", ""), path)
             if tool == "append_file":
-                return f"APPEND to {args.get('filepath','')}:\n+ " + str(args.get("content", ""))[:1000]
+                return f"APPEND to {args.get('filepath', '')}:\n+ " + str(args.get("content", ""))[:1000]
             if tool == "edit_file_line":
-                return (f"EDIT {args.get('filepath','')}\n- {str(args.get('old_string',''))[:400]}\n"
-                        f"+ {str(args.get('new_string',''))[:400]}")
+                return f"EDIT {args.get('filepath', '')}\n- {str(args.get('old_string', ''))[:400]}\n+ {str(args.get('new_string', ''))[:400]}"
             if tool in ("run_command", "git_commit", "git_push", "git_undo"):
                 return f"$ {args.get('command') or args.get('message') or tool}"
         except Exception as exc:
@@ -1553,7 +1936,7 @@ class UltimateAgent:
         self.convo = self.messages  # run_loop grew self.messages with the full exchange
         return result
 
-    def _call_llm(self, messages: List[Dict], schemas: List[Dict], provider: str):
+    def _call_llm(self, messages: list[dict], schemas: list[dict], provider: str):
         """One retry with backoff; streams through self.on_token when set."""
         for attempt in (1, 2):
             try:
@@ -1567,8 +1950,8 @@ class UltimateAgent:
                     raise
                 time.sleep(1.5)
 
-    def _call_llm_stream(self, messages: List[Dict], schemas: List[Dict], provider: str):
-        parts: List[str] = []
+    def _call_llm_stream(self, messages: list[dict], schemas: list[dict], provider: str):
+        parts: list[str] = []
         final = None
         for chunk, result, usage in ProviderRouter.call_stream(messages, schemas, provider):
             if self.cancel_event.is_set():
@@ -1590,7 +1973,7 @@ class UltimateAgent:
                 pass
         return final
 
-    def _next_fallback(self, failed: str) -> Optional[str]:
+    def _next_fallback(self, failed: str) -> str | None:
         """Failover order after a provider dies mid-run: the user's own provider
         first, then any other validated-live provider not yet tried this run."""
         self._failed_providers.add(failed)
@@ -1604,7 +1987,7 @@ class UltimateAgent:
             pass
         return None
 
-    def _route_provider(self, user_text: str) -> Tuple[str, Optional[int]]:
+    def _route_provider(self, user_text: str) -> tuple[str, int | None]:
         """Cost-aware auto-routing for a run: returns (provider, tier or None).
         Disabled via HERMES_AUTO_ROUTE=off, or when the user pinned a provider."""
         if os.getenv("HERMES_AUTO_ROUTE", "on").lower() in ("off", "0", "false"):
@@ -1618,10 +2001,18 @@ class UltimateAgent:
         routed = decision.get("provider")
         if not routed or routed == self.provider:
             return self.provider, None
-        self.logs.append({"type": "auto_route", "provider": routed, "tier": decision.get("tier"),
-                          "difficulty": decision.get("difficulty"), "reason": decision.get("reason", "")})
+        self.logs.append(
+            {
+                "type": "auto_route",
+                "provider": routed,
+                "tier": decision.get("tier"),
+                "difficulty": decision.get("difficulty"),
+                "reason": decision.get("reason", ""),
+            }
+        )
         return routed, decision.get("tier")
-    def _record_tool_outcomes(self, results: Optional[List[Dict]] = None, **kwargs):
+
+    def _record_tool_outcomes(self, results: list[dict] | None = None, **kwargs):
         try:
             for res in results or []:
                 output = str(res.get("result") or "")
@@ -1629,57 +2020,85 @@ class UltimateAgent:
                 self.tracker.record("tool_run", 0.8, success)
         except Exception:
             pass
-    def _recent_sessions(self, k: int = 5) -> List[List[Dict]]:
+
+    def _recent_sessions(self, k: int = 5) -> list[list[dict]]:
         out = []
         for sid in self.store.list_sessions()[:k]:
             msgs = self.store.load(sid)
             if msgs:
                 out.append(msgs)
         return out
+
     def _register_advanced_tools(self):
         @self.registry.register(description="Spawn a sub-agent for a task")
         def spawn_subagent(name: str, task: str) -> str:
             return SubAgent(name, task, str(self.messages[-3:])).run(self)
+
         @self.registry.register(description="Write, test, and save code")
         def implement_feature(code: str, test_code: str = "") -> str:
             if test_code:
                 v = SelfVerifier.verify_code(code, test_code)
-                if not v["passed"]: return f"Verification failed: {v['output']}"
+                if not v["passed"]:
+                    return f"Verification failed: {v['output']}"
             result = registry.execute("execute_python", {"code": code})
-            if "Error" not in result: SelfLearner.save_skill(f"impl_{int(time.time())}", code[:50], [{"code": code}])
+            if "Error" not in result:
+                SelfLearner.save_skill(f"impl_{int(time.time())}", code[:50], [{"code": code}])
             return result
+
         @self.registry.register(description="Start recording a demo for a skill")
         def start_demo(name: str, description: str) -> str:
-            SelfLearner.start_recording(name, description); return f"Recording '{name}'"
+            SelfLearner.start_recording(name, description)
+            return f"Recording '{name}'"
+
         @self.registry.register(description="Stop recording and generate skill")
-        def stop_demo() -> str: return SelfLearner.stop_recording(self.provider)
+        def stop_demo() -> str:
+            return SelfLearner.stop_recording(self.provider)
+
         @self.registry.register(description="Chain multiple skills into a composed workflow")
         def compose_workflow(skill_names_json: str, goal: str) -> str:
             return SelfLearner.compose_workflow(json.loads(skill_names_json), goal, self.provider)
+
         @self.registry.register(description="Browser control: goto, click, type, screenshot")
         def browser_action(action: str, url: str = "", selector: str = "", text: str = "") -> str:
-            m = {"goto": lambda: asyncio.run(self.browser.goto(url)), "click": lambda: asyncio.run(self.browser.click(selector)),
-                 "type": lambda: asyncio.run(self.browser.type_text(selector, text)), "screenshot": lambda: asyncio.run(self.browser.screenshot())}
+            m = {
+                "goto": lambda: asyncio.run(self.browser.goto(url)),
+                "click": lambda: asyncio.run(self.browser.click(selector)),
+                "type": lambda: asyncio.run(self.browser.type_text(selector, text)),
+                "screenshot": lambda: asyncio.run(self.browser.screenshot()),
+            }
             return m.get(action, lambda: "Unknown")()
+
         @self.registry.register(description="Desktop control: move_mouse, click, type, key, open_app")
         def desktop_action(action: str, x: int = 0, y: int = 0, text: str = "", key: str = "", app: str = "") -> str:
-            m = {"move_mouse": lambda: DesktopController.move_mouse(x,y), "click": DesktopController.click,
-                 "type": lambda: DesktopController.type_text(text), "key": lambda: DesktopController.press_key(key),
-                 "open_app": lambda: DesktopController.open_app(app or text)}
+            m = {
+                "move_mouse": lambda: DesktopController.move_mouse(x, y),
+                "click": DesktopController.click,
+                "type": lambda: DesktopController.type_text(text),
+                "key": lambda: DesktopController.press_key(key),
+                "open_app": lambda: DesktopController.open_app(app or text),
+            }
             return m.get(action, lambda: "Unknown")()
+
         @self.registry.register(description="Run parallel sub-agents. Provide JSON array of {name, prompt}")
         def multitask(tasks_json: str) -> str:
             return json.dumps(ParallelExecutor.run(json.loads(tasks_json), self), indent=2)
+
         @self.registry.register(description="Switch LLM provider at runtime")
         def switch_provider(provider: str) -> str:
             if provider in PROVIDER_CONFIGS:
-                self.provider = provider; self._provider_pinned = True
+                self.provider = provider
+                self._provider_pinned = True
                 return f"Switched to {provider} (auto-routing paused; HERMES_AUTO_ROUTE governs)"
             return f"Unknown provider. Available: {', '.join(PROVIDER_CONFIGS.keys())}"
+
         @self.registry.register(description="List all available providers")
-        def list_providers() -> str: return ", ".join(PROVIDER_CONFIGS.keys())
+        def list_providers() -> str:
+            return ", ".join(PROVIDER_CONFIGS.keys())
+
         @self.registry.register(description="Show kanban board")
-        def show_kanban() -> str: return json.dumps(self.kanban.get_board_state(), indent=2)
+        def show_kanban() -> str:
+            return json.dumps(self.kanban.get_board_state(), indent=2)
+
         @self.registry.register(description="Task board: list, add, move, remove tasks")
         def task_board(action: str = "list", task_name: str = "", column: str = "") -> str:
             if action == "list":
@@ -1694,154 +2113,223 @@ class UltimateAgent:
                 self.kanban.remove_task(task_name)
                 return f"Removed task: {task_name}"
             return f"Unknown task action: {action}"
+
         @self.registry.register(description="Create a checkpoint of current changes")
-        def create_checkpoint(label: str = "") -> str: return self.checkpoints.create_checkpoint(label)
+        def create_checkpoint(label: str = "") -> str:
+            return self.checkpoints.create_checkpoint(label)
+
         @self.registry.register(description="List all checkpoints")
-        def list_checkpoints() -> str: return json.dumps(self.checkpoints.list_checkpoints(), indent=2)
+        def list_checkpoints() -> str:
+            return json.dumps(self.checkpoints.list_checkpoints(), indent=2)
+
         @self.registry.register(description="Restore a checkpoint by label")
-        def restore_checkpoint(label: str) -> str: return self.checkpoints.restore_checkpoint(label)
+        def restore_checkpoint(label: str) -> str:
+            return self.checkpoints.restore_checkpoint(label)
+
         @self.registry.register(description="Index the codebase for semantic search")
-        def index_codebase(path: str = ".") -> str: return self.indexer.index_project(path)
+        def index_codebase(path: str = ".") -> str:
+            return self.indexer.index_project(path)
+
         @self.registry.register(description="Search the codebase index")
-        def search_index(query: str) -> str: return json.dumps(self.indexer.search(query), indent=2)
+        def search_index(query: str) -> str:
+            return json.dumps(self.indexer.search(query), indent=2)
+
         @self.registry.register(description="Analyze an error and suggest fixes")
-        def analyze_error(error: str, context: str = "") -> str: return SelfHealer.analyze_error(error, context)
+        def analyze_error(error: str, context: str = "") -> str:
+            return SelfHealer.analyze_error(error, context)
+
         @self.registry.register(description="Set safety mode: suggest, plan, or auto")
         def set_safety_mode(mode: str) -> str:
             self.safety.mode = mode
             return f"Safety mode set to: {mode}"
-        @self.registry.register(description="Save an important fact, decision, or preference to persistent cross-session memory. kind: project|decision|note|preference, importance: 0.0-1.0")
+
+        @self.registry.register(
+            description="Save an important fact, decision, or preference to persistent cross-session memory. kind: project|decision|note|preference, importance: 0.0-1.0"
+        )
         def remember(content: str, kind: str = "project", importance: str = "0.7") -> str:
             return self.context.remember(content, kind, float(importance))
+
         @self.registry.register(description="Search persistent cross-session memory")
         def recall_memory(query: str, k: str = "5") -> str:
             hits = self.context.recall(query, int(k))
             if not hits:
                 return "No matching memories."
             return json.dumps([{"id": h["id"], "kind": h["kind"], "content": h["content"]} for h in hits], indent=1)
+
         @self.registry.register(description="Show persistent memory statistics")
         def memory_stats() -> str:
             return json.dumps(self.context.stats(), indent=1)
+
         @self.registry.register(description="Dream now: consolidate recent session experience into persistent memory")
         def dream_now() -> str:
             return json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)
+
         @self.registry.register(description="Distill now: mine repeated tool workflows into reusable skills")
         def distill_now() -> str:
             return json.dumps(self.distiller.distill(), indent=1)
+
         @self.registry.register(description="Show subconscious (sleep-time compute) status")
         def subconscious_status() -> str:
             return json.dumps(self.subconscious.status(), indent=1)
+
         @self.registry.register(description="List functions/classes in a source file with line numbers")
         def code_symbols(filepath: str) -> str:
             return json.dumps(self.code_intel.symbols(filepath), indent=1)
+
         @self.registry.register(description="Find where a function/class is defined across the codebase")
         def find_definition(name: str) -> str:
             return json.dumps(self.code_intel.find_definition(name), indent=1)
+
         @self.registry.register(description="Find all references to a symbol across the codebase")
         def find_references(name: str, max_results: str = "50") -> str:
             return json.dumps(self.code_intel.references(name, int(max_results)), indent=1)
+
         @self.registry.register(description="Semantic code search (local embeddings when available, TF-IDF fallback) — better than grep for concepts")
         def semantic_search(query: str, k: str = "8") -> str:
             hits = self.search.search(query, int(k))
             return json.dumps({"mode": self.search.mode(), "hits": hits}, indent=1)
+
         @self.registry.register(description="LSP go-to-definition: exact definition location for the symbol at file:line:character (1-based)")
         def goto_definition(filepath: str, line: str, character: str) -> str:
             return json.dumps(self.lsp.definition(filepath, int(line), int(character)), indent=1)
+
         @self.registry.register(description="LSP find-usages: all references to the symbol at file:line:character (1-based)")
         def find_usages(filepath: str, line: str, character: str) -> str:
             return json.dumps(self.lsp.references(filepath, int(line), int(character)), indent=1)
+
         @self.registry.register(description="Live LSP diagnostics for a file (type errors, unused vars) — deeper than syntax check")
         def live_diagnostics(filepath: str) -> str:
             return json.dumps(self.lsp.diagnostics(filepath), indent=1)
+
         @self.registry.register(description="Build/refresh the causal world model from git history and imports")
         def build_world_model() -> str:
             return json.dumps(self.world_model.build(), indent=1)
+
         @self.registry.register(description="Predict blast radius of editing a file: risk score, importers, co-change history")
         def predict_blast_radius(filepath: str) -> str:
             return json.dumps(self.world_model.blast_radius(filepath), indent=1)
-        @self.registry.register(description="Route a question to the best expert model (MoE routing across providers). task_type: code|reasoning|vision|cheap|creative|long_context|search or blank for auto")
+
+        @self.registry.register(
+            description="Route a question to the best expert model (MoE routing across providers). task_type: code|reasoning|vision|cheap|creative|long_context|search or blank for auto"
+        )
         def consult_expert(prompt: str, task_type: str = "") -> str:
             return json.dumps(self.orchestra.consult(prompt, task_type), indent=1)
+
         @self.registry.register(description="Ask a committee of N different expert models and synthesize the best answer")
         def expert_committee(prompt: str, n: str = "3") -> str:
             return json.dumps(self.orchestra.committee(prompt, int(n)), indent=1)
+
         @self.registry.register(description="Analyze an image file with a vision model")
         def analyze_image(filepath: str, question: str = "Describe this image in detail.") -> str:
             return self.vision.analyze_image(filepath, question)
+
         @self.registry.register(description="Analyze a video file: samples frames with ffmpeg, describes them with a vision model")
         def analyze_video(filepath: str, question: str = "What happens in this video?") -> str:
             return self.vision.analyze_video(filepath, question)
+
         @self.registry.register(description="Transcribe an audio file to text")
         def transcribe_audio(filepath: str) -> str:
             return self.voice.transcribe(filepath)
+
         @self.registry.register(description="Record from the microphone for N seconds and transcribe")
         def listen(seconds: str = "5") -> str:
             return self.voice.listen(int(seconds))
+
         @self.registry.register(description="Speak text out loud via TTS")
         def speak(text: str) -> str:
             return self.voice.speak(text)
+
         @self.registry.register(description="List configured MCP servers and their connection status")
         def mcp_servers() -> str:
             return json.dumps(self.mcp.status(), indent=1)
+
         @self.registry.register(description="List tools exposed by an MCP server (auto-connects)")
         def mcp_tools(server: str) -> str:
             try:
                 return json.dumps(self.mcp.list_tools(server), indent=1)
             except Exception as e:
                 return f"MCP error: {e}"
+
         @self.registry.register(description="Invoke a tool on an MCP server. arguments = JSON object string")
         def mcp_invoke(server: str, tool: str, arguments: str = "{}") -> str:
             try:
                 return self.mcp.call_tool(server, tool, json.loads(arguments or "{}"))
             except Exception as e:
                 return f"MCP error: {e}"
+
         @self.registry.register(description="Scan this device for missing dependencies and unconfigured providers; shows install fixes")
         def system_doctor() -> str:
             report = self.doctor.scan()
             return self.doctor.summary(report) + "\n\n" + self.doctor.fix_script(report)
+
         @self.registry.register(description="List which AI models this machine can run (local by hardware specs + cloud by configured keys)")
         def advise_models() -> str:
             return self.model_advisor.render()
+
         @self.registry.register(description="Show the user's profile (persona, goals) built at first launch")
         def show_profile() -> str:
             profile = self.profiler.load()
             return json.dumps(profile, indent=1) if profile else "No profile yet. Run /profile rebuild in the CLI."
-        @self.registry.register(description="Scaffold a runnable project skeleton (text-to-app). kind: web|api|saas|fullstack|cli|mobile|ios|android. Returns files created + the command to run it.")
+
+        @self.registry.register(
+            description="Scaffold a runnable project skeleton (text-to-app). kind: web|api|saas|fullstack|cli|mobile|ios|android. Returns files created + the command to run it."
+        )
         def scaffold_app(kind: str, name: str, out_dir: str = "") -> str:
             from core.scaffold import scaffold
+
             return json.dumps(scaffold(kind, name, out_dir), indent=1)
+
         @self.registry.register(description="List the available project scaffold kinds for scaffold_app")
         def scaffold_kinds() -> str:
             from core.scaffold import kinds
+
             return ", ".join(kinds())
-        @self.registry.register(description="Scaffold using the CANONICAL community generator (create-vite/next/t3/astro/expo) when installed, else the built-in skeleton. Returns the official command to run (via run_command) or the written files.")
+
+        @self.registry.register(
+            description="Scaffold using the CANONICAL community generator (create-vite/next/t3/astro/expo) when installed, else the built-in skeleton. Returns the official command to run (via run_command) or the written files."
+        )
         def scaffold_official(kind: str, name: str) -> str:
             from core.scaffold import official
+
             return json.dumps(official(kind, name), indent=1)
-        @self.registry.register(description="Plan a deploy: detect the project in a dir, write the provider config (fly.toml/vercel.json/eas.json), return exact deploy commands. target: vercel|netlify|fly|eas (blank lists options). verify=true blocks deploy unless the eval gate passes.")
+
+        @self.registry.register(
+            description="Plan a deploy: detect the project in a dir, write the provider config (fly.toml/vercel.json/eas.json), return exact deploy commands. target: vercel|netlify|fly|eas (blank lists options). verify=true blocks deploy unless the eval gate passes."
+        )
         def deploy_plan(project_dir: str = ".", target: str = "", app: str = "", verify: str = "false") -> str:
             from core.deploy import plan
+
             return json.dumps(plan(project_dir, target, app, verify=verify.lower() in ("true", "1", "yes")), indent=1)
-        @self.registry.register(description="Verify a project before shipping: eval gate runs build/compile/tests/MCP-handshake and returns a pass|blocked verdict + per-check results.")
+
+        @self.registry.register(
+            description="Verify a project before shipping: eval gate runs build/compile/tests/MCP-handshake and returns a pass|blocked verdict + per-check results."
+        )
         def verify_project(project_dir: str = ".") -> str:
             from core.evalgate import gate
+
             return json.dumps(gate(project_dir), indent=1)
+
         @self.registry.register(description="Max Mode: generate N answers from different expert models, judge them, return the best")
         def max_mode(prompt: str, n: str = "3") -> str:
             return json.dumps(self.max_mode.run(prompt, int(n)), indent=1)
+
         @self.registry.register(description="Explain how a task would be routed (difficulty, chosen provider, cost tier)")
         def route_task(prompt: str) -> str:
             return json.dumps(self.router.route(prompt), indent=1)
+
         @self.registry.register(description="Show the calibration report: predicted confidence vs actual outcomes")
         def calibration_report() -> str:
             return json.dumps(self.tracker.report(), indent=1)
+
         @self.registry.register(description="Runtime metrics: LLM/tool latency, error rates, slowest tools, telemetry file")
         def runtime_metrics() -> str:
             data = self.telemetry.metrics()
             data["slowest_tools"] = self.telemetry.slowest_tools()
             return json.dumps(data, indent=1)
-    def run_loop(self, messages: List[Dict] = None, max_iters: int = 10) -> str:
-        if messages is None: messages = [{"role": "system", "content": self.system_prompt}]
+
+    def run_loop(self, messages: list[dict] = None, max_iters: int = 10) -> str:
+        if messages is None:
+            messages = [{"role": "system", "content": self.system_prompt}]
         self.messages = messages.copy()
         if self.messages and len(self.messages) >= 2:
             user_content = self.messages[-1].get("content", "") if self.messages[-1]["role"] == "user" else ""
@@ -1894,7 +2382,13 @@ class UltimateAgent:
             calls = []
             for tc in tcs:
                 f = tc.function if hasattr(tc, "function") else tc["function"]
-                calls.append({"id": tc.id if hasattr(tc,"id") else tc["id"], "name": f.name if hasattr(f,"name") else f["name"], "args": json.loads(f.arguments if hasattr(f,"arguments") else f["arguments"])})
+                calls.append(
+                    {
+                        "id": tc.id if hasattr(tc, "id") else tc["id"],
+                        "name": f.name if hasattr(f, "name") else f["name"],
+                        "args": json.loads(f.arguments if hasattr(f, "arguments") else f["arguments"]),
+                    }
+                )
             # Safety check
             approved_calls = []
             denied_notes = []
@@ -1932,7 +2426,9 @@ class UltimateAgent:
             if SelfLearner._recording:
                 for res in results:
                     for c in approved_calls:
-                        if c["id"] == res["id"]: SelfLearner.record_action(c["name"], c["args"]); break
+                        if c["id"] == res["id"]:
+                            SelfLearner.record_action(c["name"], c["args"])
+                            break
             for res in results:
                 self.messages.append({"role": "tool", "tool_call_id": res["id"], "content": res["result"]})
             if self.goal_manager and self.goal_manager.is_complete(response.content or ""):
@@ -1947,9 +2443,15 @@ class UltimateAgent:
                     return f"Goal Complete: {self.goal_manager.goal}{suffix}"
                 self.goal_manager.completed = False
                 self.logs.append({"type": "judge_rejection", "reason": verdict.get("reason", ""), "iteration": i})
-                self.messages.append({"role": "user", "content": f"[JUDGE] Goal NOT satisfied: {verdict.get('reason', 'insufficient evidence of completion')}. Continue working until truly complete."})
+                self.messages.append(
+                    {
+                        "role": "user",
+                        "content": f"[JUDGE] Goal NOT satisfied: {verdict.get('reason', 'insufficient evidence of completion')}. Continue working until truly complete.",
+                    }
+                )
         HookManager.fire("on_stop")
         return "Max iterations reached."
+
     def first_launch_setup(self):
         """First-run onboarding: doctor scan, profile interview, model advisor."""
         print("\n=== Welcome to Daedalus! First-launch setup (press Enter to skip any question) ===\n")
@@ -1978,47 +2480,56 @@ class UltimateAgent:
 
     COMMANDS_HELP = "/goal, /multitask, /kanban, /browser, /desktop, /record, /compose, /provider, /checkpoint, /index, /search, /safety, /memory, /remember, /dream, /distill, /subconscious, /blast, /experts, /max, /route, /calibration, /see, /say, /listen, /doctor, /models, /profile, /mcp, /reset, exit"
 
-    def handle_command(self, u: str, ask_fn: Callable[[str], str] = input) -> Optional[str]:
+    def handle_command(self, u: str, ask_fn: Callable[[str], str] = input) -> str | None:
         """UI-agnostic slash-command dispatch. Returns output text for a handled
         command ('' for silent success), or None when `u` is not a command and
         should go to the LLM. Used by the plain CLI, the rich TUI, and tests."""
         if u == "/reset":
-            self.messages = [{"role":"system","content":self.system_prompt}]
+            self.messages = [{"role": "system", "content": self.system_prompt}]
             self.convo = []
             return "Reset."
         if u.startswith("/provider"):
             p = u.split(" ", 1)[1] if " " in u else ""
             if p in PROVIDER_CONFIGS:
-                self.provider = p; self._provider_pinned = True
+                self.provider = p
+                self._provider_pinned = True
                 return f"Switched to {p} (pinned — auto-routing off for this session)"
             return f"Available: {', '.join(PROVIDER_CONFIGS.keys())}"
         if u.startswith("/kanban"):
             parts = u.split()
-            if len(parts) >= 3 and parts[1] == "add": return self.kanban.add_task(parts[2]).id
-            if len(parts) >= 2 and parts[1] == "show": return json.dumps(self.kanban.get_board_state(), indent=2)
+            if len(parts) >= 3 and parts[1] == "add":
+                return self.kanban.add_task(parts[2]).id
+            if len(parts) >= 2 and parts[1] == "show":
+                return json.dumps(self.kanban.get_board_state(), indent=2)
             return None  # fall through to LLM (historic behavior)
         if u.startswith("/goal"):
-            self.goal_manager = GoalManager(u.split(" ",1)[1] if " " in u else "")
-            return self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":f"Goal: {self.goal_manager.goal}. Work until COMPLETE."}])
+            self.goal_manager = GoalManager(u.split(" ", 1)[1] if " " in u else "")
+            return self.run_loop(
+                [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": f"Goal: {self.goal_manager.goal}. Work until COMPLETE."}]
+            )
         if u.startswith("/multitask"):
-            rest = u.split(" ",1)[1] if " " in u else ""
-            tasks = [{"name":f"T-{i}","prompt":t.strip()} for i,t in enumerate(rest.split(",") if "," in rest else rest.split("|"))]
+            rest = u.split(" ", 1)[1] if " " in u else ""
+            tasks = [{"name": f"T-{i}", "prompt": t.strip()} for i, t in enumerate(rest.split(",") if "," in rest else rest.split("|"))]
             return json.dumps(ParallelExecutor.run(tasks, self), indent=2)
         if u.startswith("/browser"):
-            p = u.split(" ",2)
-            if len(p) == 3 and p[1] == "goto": return str(asyncio.run(self.browser.goto(p[2])))
-            if len(p) >= 2 and p[1] == "screenshot": return str(asyncio.run(self.browser.screenshot()))
+            p = u.split(" ", 2)
+            if len(p) == 3 and p[1] == "goto":
+                return str(asyncio.run(self.browser.goto(p[2])))
+            if len(p) >= 2 and p[1] == "screenshot":
+                return str(asyncio.run(self.browser.screenshot()))
             return ""
         if u.startswith("/desktop open"):
-            return str(DesktopController.open_app(u.split("open ",1)[1]))
+            return str(DesktopController.open_app(u.split("open ", 1)[1]))
         if u.startswith("/record"):
-            parts = u.split(" ",2)
+            parts = u.split(" ", 2)
             if len(parts) >= 3:
-                SelfLearner.start_recording(parts[1], parts[2]); return f"Recording '{parts[1]}'"
+                SelfLearner.start_recording(parts[1], parts[2])
+                return f"Recording '{parts[1]}'"
             return "Usage: /record <name> <desc>"
-        if u == "/stop_record": return SelfLearner.stop_recording(self.provider)
+        if u == "/stop_record":
+            return SelfLearner.stop_recording(self.provider)
         if u.startswith("/compose"):
-            rest = u.split(" ",2)
+            rest = u.split(" ", 2)
             if len(rest) >= 3:
                 names = [s.strip() for s in rest[1].split(",")]
                 return SelfLearner.compose_workflow(names, rest[2], self.provider)
@@ -2032,7 +2543,8 @@ class UltimateAgent:
             if len(parts) >= 3 and parts[1] == "restore":
                 return self.checkpoints.restore_checkpoint(parts[2])
             return None
-        if u.startswith("/index"): return self.indexer.index_project()
+        if u.startswith("/index"):
+            return self.indexer.index_project()
         if u.startswith("/search"):
             return json.dumps(self.indexer.search(u.split(" ", 1)[1] if " " in u else ""), indent=2)
         if u.startswith("/max"):
@@ -2041,9 +2553,11 @@ class UltimateAgent:
         if u.startswith("/route"):
             prompt_text = u.split(" ", 1)[1] if " " in u else ""
             return json.dumps(self.router.route(prompt_text), indent=1) if prompt_text else "Usage: /route <prompt>"
-        if u == "/calibration": return json.dumps(self.tracker.report(), indent=1)
+        if u == "/calibration":
+            return json.dumps(self.tracker.report(), indent=1)
         if u.startswith("/ship"):
-            from core.scaffold import scaffold, kinds
+            from core.scaffold import kinds, scaffold
+
             parts = u.split()
             if len(parts) < 3:
                 return f"Usage: /ship <kind> <name>  (kinds: {', '.join(kinds())})"
@@ -2053,6 +2567,7 @@ class UltimateAgent:
             return result.get("error", "scaffold failed")
         if u.startswith("/deploy"):
             from core.deploy import plan
+
             parts = u.split()
             result = plan(parts[2] if len(parts) > 2 else ".", parts[1] if len(parts) > 1 else "")
             return json.dumps(result, indent=1)
@@ -2063,7 +2578,8 @@ class UltimateAgent:
         if u == "/doctor":
             report = self.doctor.scan()
             return self.doctor.summary(report) + "\n\n" + self.doctor.fix_script(report)
-        if u == "/models": return self.model_advisor.render()
+        if u == "/models":
+            return self.model_advisor.render()
         if u.startswith("/profile"):
             if "rebuild" in u:
                 answers = self.profiler.interview(lambda q: ask_fn(f"{q}\n> "))
@@ -2074,15 +2590,20 @@ class UltimateAgent:
         if u.startswith("/mcp"):
             parts = u.split(" ", 3)
             sub = parts[1] if len(parts) > 1 else "list"
-            if sub == "list": return json.dumps(self.mcp.status(), indent=1)
+            if sub == "list":
+                return json.dumps(self.mcp.status(), indent=1)
             if sub == "tools" and len(parts) > 2:
-                try: return json.dumps(self.mcp.list_tools(parts[2]), indent=1)
-                except Exception as e: return f"MCP error: {e}"
+                try:
+                    return json.dumps(self.mcp.list_tools(parts[2]), indent=1)
+                except Exception as e:
+                    return f"MCP error: {e}"
             if sub == "call" and len(parts) > 3:
                 server_tool = parts[2].split("/", 1)
                 if len(server_tool) == 2:
-                    try: return self.mcp.call_tool(server_tool[0], server_tool[1], json.loads(parts[3]))
-                    except Exception as e: return f"MCP error: {e}"
+                    try:
+                        return self.mcp.call_tool(server_tool[0], server_tool[1], json.loads(parts[3]))
+                    except Exception as e:
+                        return f"MCP error: {e}"
                 return "Usage: /mcp call <server>/<tool> <json-args>"
             return "Usage: /mcp list | /mcp tools <server> | /mcp call <server>/<tool> <json-args>"
         if u.startswith("/blast"):
@@ -2090,7 +2611,8 @@ class UltimateAgent:
             return json.dumps(self.world_model.blast_radius(target), indent=1) if target else "Usage: /blast <file>"
         if u.startswith("/experts"):
             rest = u.split(" ", 1)[1] if " " in u else ""
-            if rest: return json.dumps(self.orchestra.committee(rest), indent=1)
+            if rest:
+                return json.dumps(self.orchestra.committee(rest), indent=1)
             return json.dumps({"available": _available_providers(), "profiles": self.orchestra.profiles}, indent=1)
         if u.startswith("/see"):
             parts = u.split(" ", 2)
@@ -2106,12 +2628,15 @@ class UltimateAgent:
             heard = self.voice.listen(secs)
             out = f"Heard: {heard}"
             if heard and not heard.endswith(("not configured.", "failed.")) and "not " not in heard[:30]:
-                result = self.run_loop([{"role":"system","content":self.system_prompt},{"role":"user","content":heard}])
+                result = self.run_loop([{"role": "system", "content": self.system_prompt}, {"role": "user", "content": heard}])
                 out += f"\n\n{result}"
             return out
-        if u == "/dream": return json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)
-        if u == "/distill": return json.dumps(self.distiller.distill(), indent=1)
-        if u == "/subconscious": return json.dumps(self.subconscious.status(), indent=1)
+        if u == "/dream":
+            return json.dumps(self.dreamer.dream(self._recent_sessions(), use_llm=True), indent=1)
+        if u == "/distill":
+            return json.dumps(self.distiller.distill(), indent=1)
+        if u == "/subconscious":
+            return json.dumps(self.subconscious.status(), indent=1)
         if u.startswith("/remember"):
             text = u.split(" ", 1)[1] if " " in u else ""
             return self.context.remember(text) if text else "Usage: /remember <fact>"
@@ -2130,7 +2655,6 @@ class UltimateAgent:
         return None
 
     def chat(self):
-        import uuid
         sid = self.session_id
         if not self.profiler.exists() and sys.stdin.isatty():
             self.first_launch_setup()
@@ -2139,39 +2663,61 @@ class UltimateAgent:
         print(f"Safety mode: {self.safety.mode}")
         print(f"Commands: {self.COMMANDS_HELP}\n")
         while True:
-            try: u = input("You: ").strip()
-            except (EOFError, KeyboardInterrupt): break
-            if not u: continue
-            if u == "exit": break
+            try:
+                u = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not u:
+                continue
+            if u == "exit":
+                break
             handled = self.handle_command(u)
             if handled is not None:
-                if handled: print(handled)
+                if handled:
+                    print(handled)
                 continue
             try:
                 result = self.converse(u)
             except KeyboardInterrupt:
-                print("\n[interrupted]\n"); continue
+                print("\n[interrupted]\n")
+                continue
             print(f"\n{result}\n")
+
 
 def _ws_ops():
     from types import SimpleNamespace
+
     return SimpleNamespace(
-        registry=registry, HookManager=HookManager, SelfLearner=SelfLearner,
-        SelfHealer=SelfHealer, CheckpointManager=CheckpointManager,
-        PluginMarketplace=PluginMarketplace, FileWatcher=FileWatcher,
-        _git_diff=_git_diff, git_undo=git_undo, _pyright_diagnostics=_pyright_diagnostics,
-        _drain_stream=_drain_stream, test_provider=test_provider, review_code=review_code,
-        refactor_code=refactor_code, explain_code=explain_code, _expand_mentions=_expand_mentions,
+        registry=registry,
+        HookManager=HookManager,
+        SelfLearner=SelfLearner,
+        SelfHealer=SelfHealer,
+        CheckpointManager=CheckpointManager,
+        PluginMarketplace=PluginMarketplace,
+        FileWatcher=FileWatcher,
+        _git_diff=_git_diff,
+        git_undo=git_undo,
+        _pyright_diagnostics=_pyright_diagnostics,
+        _drain_stream=_drain_stream,
+        test_provider=test_provider,
+        review_code=review_code,
+        refactor_code=refactor_code,
+        explain_code=explain_code,
+        _expand_mentions=_expand_mentions,
     )
+
 
 class WebSocketServer(_CoreWebSocketServer):
     """Back-compat shim: original single-arg constructor, ops wired automatically."""
+
     def __init__(self, agent):
         super().__init__(agent, _ws_ops())
+
 
 async def run_ws_server(agent):
     ws = WebSocketServer(agent)
     await ws.start()
+
 
 if __name__ == "__main__":
     mode = sys.argv[1] if len(sys.argv) > 1 else "cli"

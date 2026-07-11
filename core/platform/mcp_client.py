@@ -3,13 +3,14 @@
 Speaks newline-delimited JSON-RPC 2.0 to servers spawned from .hermes/mcp.json:
     {"servers": {"<name>": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"], "env": {}}}}
 """
+
 import json
 import os
 import queue
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 PROTOCOL_VERSION = "2024-11-05"
 DEFAULT_TIMEOUT = 20.0
@@ -19,7 +20,7 @@ class _Connection:
     def __init__(self, name: str, proc: subprocess.Popen):
         self.name = name
         self.proc = proc
-        self.responses: "queue.Queue[dict]" = queue.Queue()
+        self.responses: queue.Queue[dict] = queue.Queue()
         self.next_id = 1
         self.lock = threading.Lock()
         self.reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -40,7 +41,7 @@ class _Connection:
         except (ValueError, OSError):
             pass
 
-    def rpc(self, method: str, params: Optional[dict] = None, timeout: float = DEFAULT_TIMEOUT) -> dict:
+    def rpc(self, method: str, params: dict | None = None, timeout: float = DEFAULT_TIMEOUT) -> dict:
         with self.lock:
             msg_id = self.next_id
             self.next_id += 1
@@ -60,7 +61,7 @@ class _Connection:
             # response to a different id — keep it for whoever waits (rare, single-threaded use)
             self.responses.put(msg)
 
-    def notify(self, method: str, params: Optional[dict] = None):
+    def notify(self, method: str, params: dict | None = None):
         payload = {"jsonrpc": "2.0", "method": method, "params": params or {}}
         self.proc.stdin.write(json.dumps(payload) + "\n")
         self.proc.stdin.flush()
@@ -79,10 +80,10 @@ class _Connection:
 class McpClient:
     def __init__(self, config_path: str = ".hermes/mcp.json"):
         self.config_path = Path(config_path)
-        self._connections: Dict[str, _Connection] = {}
+        self._connections: dict[str, _Connection] = {}
 
     # ── Config ────────────────────────────────────────────────
-    def servers(self) -> Dict[str, dict]:
+    def servers(self) -> dict[str, dict]:
         if not self.config_path.exists():
             return {}
         try:
@@ -90,7 +91,7 @@ class McpClient:
         except ValueError:
             return {}
 
-    def add_server(self, name: str, command: str, args: Optional[List[str]] = None, env: Optional[dict] = None):
+    def add_server(self, name: str, command: str, args: list[str] | None = None, env: dict | None = None):
         config = {"servers": self.servers()}
         config["servers"][name] = {"command": command, "args": args or [], "env": env or {}}
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,18 +108,26 @@ class McpClient:
         try:
             proc = subprocess.Popen(
                 [spec["command"], *spec.get("args", [])],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                text=True, env=env, bufsize=1,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                env=env,
+                bufsize=1,
             )
         except OSError as exc:
             return f"Failed to spawn '{name}': {exc}"
         conn = _Connection(name, proc)
         try:
-            result = conn.rpc("initialize", {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "hermes-ultimate", "version": "1.0"},
-            }, timeout=timeout)
+            result = conn.rpc(
+                "initialize",
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "hermes-ultimate", "version": "1.0"},
+                },
+                timeout=timeout,
+            )
             conn.notify("notifications/initialized")
         except (TimeoutError, RuntimeError, OSError) as exc:
             conn.close()
@@ -127,7 +136,7 @@ class McpClient:
         server_info = result.get("serverInfo", {})
         return f"Connected to '{name}' ({server_info.get('name', '?')} {server_info.get('version', '')})".strip()
 
-    def _conn(self, name: str) -> Optional[_Connection]:
+    def _conn(self, name: str) -> _Connection | None:
         conn = self._connections.get(name)
         if conn and conn.proc.poll() is None:
             return conn
@@ -139,14 +148,11 @@ class McpClient:
         return conn
 
     # ── MCP operations ────────────────────────────────────────
-    def list_tools(self, name: str) -> List[Dict[str, Any]]:
+    def list_tools(self, name: str) -> list[dict[str, Any]]:
         result = self._conn(name).rpc("tools/list")
-        return [
-            {"name": t.get("name"), "description": t.get("description", ""), "inputSchema": t.get("inputSchema", {})}
-            for t in result.get("tools", [])
-        ]
+        return [{"name": t.get("name"), "description": t.get("description", ""), "inputSchema": t.get("inputSchema", {})} for t in result.get("tools", [])]
 
-    def call_tool(self, name: str, tool: str, arguments: Optional[dict] = None) -> str:
+    def call_tool(self, name: str, tool: str, arguments: dict | None = None) -> str:
         result = self._conn(name).rpc("tools/call", {"name": tool, "arguments": arguments or {}}, timeout=60.0)
         parts = []
         for item in result.get("content", []):
@@ -163,7 +169,7 @@ class McpClient:
             conn.close()
         self._connections = {}
 
-    def status(self) -> Dict[str, str]:
+    def status(self) -> dict[str, str]:
         out = {}
         for name in self.servers():
             conn = self._connections.get(name)

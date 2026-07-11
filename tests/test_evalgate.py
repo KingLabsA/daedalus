@@ -1,13 +1,12 @@
 """Tests for core.evalgate — pre-deploy verification (offline, injectable runner)."""
+
 import sys
 from pathlib import Path
 
-import pytest
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.evalgate import checks_for, gate, run_checks
 from core.deploy import plan
+from core.evalgate import checks_for, gate, run_checks
 from core.scaffold import scaffold
 
 
@@ -72,9 +71,17 @@ def test_deploy_blocked_when_verify_fails(tmp_path, monkeypatch):
     scaffold("web", "w", str(tmp_path))
     # make the gate fail by monkeypatching evalgate.gate
     import core.evalgate as eg
-    monkeypatch.setattr(eg, "gate", lambda d, k="", runner=None: {"ok": True, "passed": False,
-        "verdict": "BLOCKED — failing checks: npm run build",
-        "checks": [{"name": "npm run build", "passed": False, "detail": "err"}]})
+
+    monkeypatch.setattr(
+        eg,
+        "gate",
+        lambda d, k="", runner=None: {
+            "ok": True,
+            "passed": False,
+            "verdict": "BLOCKED — failing checks: npm run build",
+            "checks": [{"name": "npm run build", "passed": False, "detail": "err"}],
+        },
+    )
     r = plan(str(tmp_path), "vercel", verify=True, which=lambda c: "/bin/" + c)
     assert not r["ok"] and r.get("blocked_by_eval")
 
@@ -82,8 +89,8 @@ def test_deploy_blocked_when_verify_fails(tmp_path, monkeypatch):
 def test_deploy_allowed_when_verify_passes(tmp_path, monkeypatch):
     scaffold("web", "w", str(tmp_path))
     import core.evalgate as eg
-    monkeypatch.setattr(eg, "gate", lambda d, k="", runner=None: {"ok": True, "passed": True,
-        "verdict": "PASS", "checks": []})
+
+    monkeypatch.setattr(eg, "gate", lambda d, k="", runner=None: {"ok": True, "passed": True, "verdict": "PASS", "checks": []})
     r = plan(str(tmp_path), "vercel", verify=True, which=lambda c: "/bin/" + c)
     assert r["ok"] and r["target"] == "vercel"
 

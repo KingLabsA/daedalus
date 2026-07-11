@@ -1,4 +1,5 @@
 """Tests for Phase 10 — multi-turn continuity, diff-approve, destructive detection."""
+
 import os
 import sys
 import tempfile
@@ -33,10 +34,12 @@ def _resp(content="", tool_calls=None):
 
 def _toolcall(cid, name, args):
     import json
+
     return SimpleNamespace(id=cid, function=SimpleNamespace(name=name, arguments=json.dumps(args)))
 
 
 # ── destructive detection + diff ─────────────────────────────
+
 
 def test_is_destructive():
     assert _is_destructive("write_file") and _is_destructive("run_command")
@@ -49,6 +52,7 @@ def test_unified_diff():
 
 
 # ── multi-turn continuity ────────────────────────────────────
+
 
 def test_converse_accumulates_turns(agent, monkeypatch):
     seen = {"lens": []}
@@ -82,6 +86,7 @@ def test_reset_clears_convo(agent, monkeypatch):
 
 
 # ── diff-approve flow ────────────────────────────────────────
+
 
 def test_approve_fn_gates_writes(agent, monkeypatch):
     agent.safety.mode = "suggest"  # writes blocked unless approved
