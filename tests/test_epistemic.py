@@ -1,4 +1,5 @@
 """Tests for core.epistemic — calibration tracker, cost-aware router, max mode."""
+
 import re
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ def tracker(tmp_path):
 
 
 # ── CalibrationTracker ───────────────────────────────────────
+
 
 def test_calibrated_falls_back_with_thin_data(tracker):
     assert tracker.calibrated(0.9) == 0.9  # no history yet
@@ -66,6 +68,7 @@ def test_confidence_clamped(tracker):
 
 # ── CostAwareRouter ──────────────────────────────────────────
 
+
 def _router(available, tracker=None, threshold=0.45):
     return CostAwareRouter(available_fn=lambda: available, tracker=tracker, threshold=threshold)
 
@@ -73,10 +76,7 @@ def _router(available, tracker=None, threshold=0.45):
 def test_difficulty_ordering():
     router = _router(["openai"])
     easy = router.difficulty("fix a typo in README")
-    hard = router.difficulty(
-        "design the architecture for a distributed system, analyze trade-offs, "
-        "debug this race condition and plan the migration"
-    )
+    hard = router.difficulty("design the architecture for a distributed system, analyze trade-offs, debug this race condition and plan the migration")
     assert easy < hard
     assert 0.0 <= easy <= 1.0 and 0.0 <= hard <= 1.0
 
@@ -85,9 +85,7 @@ def test_route_easy_to_cheap_hard_to_strong():
     router = _router(["fable", "groq", "deepseek"])
     easy = router.route("fix a typo")
     assert easy["provider"] == "groq" and easy["tier"] == 1
-    hard = router.route(
-        "design the architecture for a distributed migration, analyze trade-offs and root cause the deadlock"
-    )
+    hard = router.route("design the architecture for a distributed migration, analyze trade-offs and root cause the deadlock")
     assert hard["provider"] == "fable" and hard["tier"] == 4
 
 
@@ -124,6 +122,7 @@ def test_record_outcome_roundtrip(tmp_path):
 
 
 # ── MaxMode ──────────────────────────────────────────────────
+
 
 def _candidates(answers):
     return lambda prompt, n: dict(list(answers.items())[:n])

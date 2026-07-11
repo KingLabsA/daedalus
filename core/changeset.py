@@ -5,9 +5,9 @@ work mid-turn), while this manager snapshots old/new content. Review at file
 OR hunk granularity: rejecting a hunk rebuilds the file with only that block
 restored to the original. Standalone, stdlib-only, never raises into the loop.
 """
+
 import difflib
 from pathlib import Path
-from typing import Dict, List, Optional
 
 WRITE_TOOLS = {"write_file", "append_file", "edit_file_line"}
 MAX_TURNS = 20
@@ -15,9 +15,7 @@ MAX_SNAPSHOT_BYTES = 2_000_000
 
 
 def _diff(old: str, new: str, path: str) -> str:
-    lines = list(difflib.unified_diff(
-        old.splitlines(), new.splitlines(),
-        fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=3))
+    lines = list(difflib.unified_diff(old.splitlines(), new.splitlines(), fromfile=f"a/{path}", tofile=f"b/{path}", lineterm="", n=3))
     return "\n".join(lines[:400])
 
 
@@ -41,8 +39,8 @@ def _compute_ops(old: str, new: str):
 
 class ChangesetManager:
     def __init__(self):
-        self._turns: List[Dict] = []   # [{id, entries: {path: entry}}]
-        self._pending: Dict[str, Dict] = {}
+        self._turns: list[dict] = []  # [{id, entries: {path: entry}}]
+        self._pending: dict[str, dict] = {}
         self._counter = 0
         self._registered = []
 
@@ -58,7 +56,7 @@ class ChangesetManager:
             hm.unregister(e, h)
         self._registered = []
 
-    def _on_pre_tool(self, calls: Optional[List[Dict]] = None, **kw):
+    def _on_pre_tool(self, calls: list[dict] | None = None, **kw):
         try:
             for call in calls or []:
                 if call.get("name") not in WRITE_TOOLS:
@@ -75,7 +73,7 @@ class ChangesetManager:
         except Exception:
             pass
 
-    def _on_post_tool(self, results: Optional[List[Dict]] = None, **kw):
+    def _on_post_tool(self, results: list[dict] | None = None, **kw):
         try:
             for res in results or []:
                 pend = self._pending.pop(res.get("id") or "", None)
@@ -93,8 +91,11 @@ class ChangesetManager:
                 old = prior["old"] if prior else pend["old"]  # chain edits within a turn
                 ops, n_hunks = _compute_ops(old, new)
                 turn["entries"][pend["path"]] = {
-                    "path": pend["path"], "tool": pend["tool"],
-                    "old": old, "new": new, "ops": ops,
+                    "path": pend["path"],
+                    "tool": pend["tool"],
+                    "old": old,
+                    "new": new,
+                    "ops": ops,
                     "hunks": [{"status": "applied"} for _ in range(n_hunks)],
                 }
         except Exception:
@@ -109,21 +110,21 @@ class ChangesetManager:
         self._pending.clear()
         return cs_id
 
-    def _current_turn(self) -> Dict:
+    def _current_turn(self) -> dict:
         if not self._turns:
             self.begin_turn()
         return self._turns[-1]
 
-    def _find(self, cs_id: str) -> Optional[Dict]:
+    def _find(self, cs_id: str) -> dict | None:
         return next((t for t in self._turns if t["id"] == cs_id), None)
 
-    def _entry(self, cs_id: str, path: str) -> Optional[Dict]:
+    def _entry(self, cs_id: str, path: str) -> dict | None:
         turn = self._find(cs_id)
         return (turn or {}).get("entries", {}).get(path)
 
     # ── hunk mechanics ────────────────────────────────────────
     @staticmethod
-    def _file_status(entry: Dict) -> str:
+    def _file_status(entry: dict) -> str:
         statuses = {h["status"] for h in entry["hunks"]} or {"applied"}
         if statuses == {"reverted"}:
             return "reverted"
@@ -134,33 +135,31 @@ class ChangesetManager:
         return "applied"
 
     @staticmethod
-    def _hunk_diff(entry: Dict, hunk_idx: int) -> str:
+    def _hunk_diff(entry: dict, hunk_idx: int) -> str:
         a = entry["old"].splitlines(keepends=True)
         b = entry["new"].splitlines(keepends=True)
         for op in entry["ops"]:
             if op["hunk"] == hunk_idx:
                 out = [f"@@ -{op['i1'] + 1},{op['i2'] - op['i1']} +{op['j1'] + 1},{op['j2'] - op['j1']} @@"]
-                out += ["-" + l.rstrip("\n") for l in a[op["i1"]:op["i2"]]]
-                out += ["+" + l.rstrip("\n") for l in b[op["j1"]:op["j2"]]]
+                out += ["-" + l.rstrip("\n") for l in a[op["i1"] : op["i2"]]]
+                out += ["+" + l.rstrip("\n") for l in b[op["j1"] : op["j2"]]]
                 return "\n".join(out[:200])
         return ""
 
     @staticmethod
-    def _rebuild(entry: Dict) -> str:
+    def _rebuild(entry: dict) -> str:
         """Compose file content: kept hunks use new lines, reverted use old."""
         a = entry["old"].splitlines(keepends=True)
         b = entry["new"].splitlines(keepends=True)
-        out: List[str] = []
+        out: list[str] = []
         for op in entry["ops"]:
-            if op["hunk"] is None:
-                out.extend(a[op["i1"]:op["i2"]])
-            elif entry["hunks"][op["hunk"]]["status"] == "reverted":
-                out.extend(a[op["i1"]:op["i2"]])
+            if op["hunk"] is None or entry["hunks"][op["hunk"]]["status"] == "reverted":
+                out.extend(a[op["i1"] : op["i2"]])
             else:
-                out.extend(b[op["j1"]:op["j2"]])
+                out.extend(b[op["j1"] : op["j2"]])
         return "".join(out)
 
-    def _write_rebuilt(self, entry: Dict) -> str:
+    def _write_rebuilt(self, entry: dict) -> str:
         try:
             content = self._rebuild(entry)
             p = Path(entry["path"])
@@ -173,7 +172,7 @@ class ChangesetManager:
             return f"failed: {exc}"
 
     # ── review API ────────────────────────────────────────────
-    def summary(self, cs_id: str = "") -> Dict:
+    def summary(self, cs_id: str = "") -> dict:
         turn = self._find(cs_id) if cs_id else (self._turns[-1] if self._turns else None)
         if not turn:
             return {"id": None, "files": []}
@@ -181,21 +180,20 @@ class ChangesetManager:
             "id": turn["id"],
             "files": [
                 {
-                    "path": e["path"], "tool": e["tool"], "status": self._file_status(e),
+                    "path": e["path"],
+                    "tool": e["tool"],
+                    "status": self._file_status(e),
                     "diff": _diff(e["old"], e["new"], e["path"]),
-                    "hunks": [
-                        {"index": i, "status": h["status"], "diff": self._hunk_diff(e, i)}
-                        for i, h in enumerate(e["hunks"])
-                    ],
+                    "hunks": [{"index": i, "status": h["status"], "diff": self._hunk_diff(e, i)} for i, h in enumerate(e["hunks"])],
                 }
                 for e in turn["entries"].values()
             ],
         }
 
-    def list_turns(self) -> List[Dict]:
+    def list_turns(self) -> list[dict]:
         return [{"id": t["id"], "files": len(t["entries"])} for t in self._turns if t["entries"]]
 
-    def original(self, cs_id: str, path: str) -> Optional[str]:
+    def original(self, cs_id: str, path: str) -> str | None:
         """Pre-edit content of a file in a changeset (for external diff viewers)."""
         entry = self._entry(cs_id, path)
         return entry["old"] if entry else None
@@ -235,11 +233,10 @@ class ChangesetManager:
             return f"Hunk {hunk_idx} already reverted"
         entry["hunks"][hunk_idx]["status"] = "reverted"
         result = self._write_rebuilt(entry)
-        return (f"Reverted hunk {hunk_idx} of {path}"
-                if result in ("written", "removed") else f"Revert {result}")
+        return f"Reverted hunk {hunk_idx} of {path}" if result in ("written", "removed") else f"Revert {result}"
 
 
-def safe_repo_path(path: str, root: str = ".") -> Optional[Path]:
+def safe_repo_path(path: str, root: str = ".") -> Path | None:
     """Resolve a user-supplied path, refusing escapes outside the project root."""
     try:
         root_r = Path(root).resolve()

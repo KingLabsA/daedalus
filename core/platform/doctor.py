@@ -3,10 +3,11 @@
 Every Hermes capability degrades gracefully when a dependency is absent; the doctor
 tells the user exactly what is missing, what it unlocks, and how to install it.
 """
+
 import importlib.util
 import os
 import shutil
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 BINARIES = [
     # (binary, needed_for, install_hint)
@@ -39,15 +40,15 @@ PY_PACKAGES = [
 class DependencyScanner:
     def __init__(
         self,
-        which_fn: Callable[[str], Optional[str]] = shutil.which,
-        provider_configs: Optional[Dict[str, dict]] = None,
-        env: Optional[dict] = None,
+        which_fn: Callable[[str], str | None] = shutil.which,
+        provider_configs: dict[str, dict] | None = None,
+        env: dict | None = None,
     ):
         self.which_fn = which_fn
         self.provider_configs = provider_configs or {}
         self.env = env if env is not None else dict(os.environ)
 
-    def scan(self) -> Dict:
+    def scan(self) -> dict:
         ok, missing = [], []
         for binary, needed_for, hint in BINARIES:
             if self.which_fn(binary):
@@ -77,7 +78,7 @@ class DependencyScanner:
             "disk_free_gb": disk_free_gb,
         }
 
-    def fix_script(self, report: Optional[Dict] = None) -> str:
+    def fix_script(self, report: dict | None = None) -> str:
         report = report or self.scan()
         lines = ["# Hermes doctor — run these to unlock missing capabilities:"]
         for item in report["missing"]:
@@ -88,7 +89,7 @@ class DependencyScanner:
             return "# Nothing to fix — all dependencies present."
         return "\n".join(lines)
 
-    def summary(self, report: Optional[Dict] = None) -> str:
+    def summary(self, report: dict | None = None) -> str:
         report = report or self.scan()
         parts = [
             f"Doctor: {len(report['ok'])} dependencies OK, {len(report['missing'])} missing, "

@@ -1,4 +1,5 @@
 """Tests for Phase 7 — cost-aware auto-routing wired into the agent loop."""
+
 import os
 import sys
 import tempfile
@@ -27,9 +28,7 @@ def test_route_provider_easy_vs_hard(agent, monkeypatch):
     monkeypatch.setenv("HERMES_AUTO_ROUTE", "on")
     agent._provider_pinned = False
     easy_provider, easy_tier = agent._route_provider("fix a typo in the README")
-    hard_provider, hard_tier = agent._route_provider(
-        "design the architecture for a distributed migration, analyze trade-offs and debug this race condition"
-    )
+    hard_provider, hard_tier = agent._route_provider("design the architecture for a distributed migration, analyze trade-offs and debug this race condition")
     # tiers only reported when routing actually diverts from the default provider
     if easy_tier is not None and hard_tier is not None:
         assert easy_tier <= hard_tier

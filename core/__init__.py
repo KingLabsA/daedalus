@@ -3,21 +3,36 @@
 # agent_ultimate itself imports from core).
 
 _EXPORTS = {
-    "UltimateAgent": "agent_ultimate", "ToolRegistry": "agent_ultimate", "registry": "agent_ultimate",
-    "SessionStore": "agent_ultimate", "compress_messages": "agent_ultimate",
-    "ProviderRouter": "core.providers",
-    "SelfLearner": "agent_ultimate", "SelfHealer": "agent_ultimate", "SelfVerifier": "agent_ultimate",
-    "AdvancedBrowser": "agent_ultimate", "DesktopController": "agent_ultimate",
-    "KanbanBoard": "agent_ultimate", "KanbanTask": "agent_ultimate", "KanbanWorker": "agent_ultimate",
-    "GoalManager": "agent_ultimate", "SubAgent": "agent_ultimate", "ParallelExecutor": "agent_ultimate",
-    "CheckpointManager": "agent_ultimate", "CodebaseIndexer": "agent_ultimate",
-    "SafetyManager": "agent_ultimate", "HookManager": "agent_ultimate", "FileWatcher": "agent_ultimate",
+    # From core.tools
+    "ToolRegistry": "core.tools",
+    "registry": "core.tools",
+    "SelfHealer": "core.tools",
+    "SelfLearner": "core.tools",
+    "HookManager": "core.tools",
+    "FileWatcher": "core.tools",
+    "CORE_TOOLS": "core.tools",
+    "DESTRUCTIVE_TOOLS": "core.tools",
+    "BLOCKED_COMMANDS": "core.tools",
+    "MAX_FILE_SIZE": "core.tools",
+    "PROMPT_INJECTION_PATTERNS": "core.tools",
+    # From core.memory
+    "SessionStore": "core.memory",
+    "compress_messages": "core.memory",
+    "PluginMarketplace": "core.memory",
+    # From core.kanban
+    "KanbanBoard": "core.kanban",
+    "KanbanTask": "core.kanban",
+    "KanbanWorker": "core.kanban",
+    "GoalManager": "core.kanban",
+    "SubAgent": "core.kanban",
+    "ParallelExecutor": "core.kanban",
 }
 
 
 def __getattr__(name):
     if name in _EXPORTS:
         import importlib
+
         mod = importlib.import_module(_EXPORTS[name])
         return getattr(mod, name)
     raise AttributeError(f"module 'core' has no attribute {name!r}")

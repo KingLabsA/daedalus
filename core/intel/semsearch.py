@@ -1,9 +1,9 @@
 """TF-IDF semantic-lite search over code chunks. Pure stdlib, offline, lazy-built."""
+
 import math
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List
 
 from .codeintel import SKIP_DIRS
 
@@ -12,7 +12,7 @@ _CAMEL_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]+")
 
 
-def tokenize(text: str) -> List[str]:
+def tokenize(text: str) -> list[str]:
     tokens = []
     for word in _WORD_RE.findall(text):
         for part in _CAMEL_RE.sub(" ", word).replace("_", " ").split():
@@ -27,11 +27,11 @@ class SemanticIndex:
         self.exts = set(exts) if exts else DEFAULT_EXTS
         self.chunk_lines = chunk_lines
         self.max_files = max_files
-        self._chunks: List[Dict] = []   # {file, line, tf: {token: weight}, norm}
+        self._chunks: list[dict] = []  # {file, line, tf: {token: weight}, norm}
         self._df: Counter = Counter()
         self._built = False
 
-    def build(self) -> Dict:
+    def build(self) -> dict:
         self._chunks, self._df = [], Counter()
         files = 0
         for path in sorted(self.root.rglob("*")):
@@ -67,17 +67,14 @@ class SemanticIndex:
         self._built = True
         return {"files": files, "chunks": len(self._chunks), "vocab": len(self._df)}
 
-    def search(self, query: str, k: int = 8) -> List[Dict]:
+    def search(self, query: str, k: int = 8) -> list[dict]:
         if not self._built:
             self.build()
         q_counts = Counter(tokenize(query))
         if not q_counts or not self._chunks:
             return []
         n = len(self._chunks)
-        q_vec = {
-            token: (1 + math.log(count)) * math.log(1 + n / max(1, self._df.get(token, 0) or n))
-            for token, count in q_counts.items()
-        }
+        q_vec = {token: (1 + math.log(count)) * math.log(1 + n / max(1, self._df.get(token, 0) or n)) for token, count in q_counts.items()}
         q_norm = math.sqrt(sum(w * w for w in q_vec.values())) or 1.0
         scored = []
         for chunk in self._chunks:
@@ -85,7 +82,4 @@ class SemanticIndex:
             if dot > 0:
                 scored.append((dot / (q_norm * chunk["norm"]), chunk))
         scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [
-            {"file": c["file"], "line": c["line"], "score": round(score, 4), "preview": c["preview"]}
-            for score, c in scored[:k]
-        ]
+        return [{"file": c["file"], "line": c["line"], "score": round(score, 4), "preview": c["preview"]} for score, c in scored[:k]]

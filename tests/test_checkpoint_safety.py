@@ -3,11 +3,11 @@
 Previously CheckpointManager used `git stash push`, which removed changes from the
 working tree — silently discarding a user's (or a concurrent process's) edits.
 """
+
 import json
 import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,6 +20,7 @@ os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 def git_repo(tmp_path, monkeypatch):
     def run(*a):
         subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
+
     run("init", "-q")
     run("config", "user.email", "t@t.t")
     run("config", "user.name", "t")
@@ -29,6 +30,7 @@ def git_repo(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     # point checkpoint storage inside the repo
     import agent_ultimate as au
+
     monkeypatch.setattr(au, "CHECKPOINTS_DIR", tmp_path / ".hermes" / "checkpoints")
     au.CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
     return tmp_path
@@ -36,6 +38,7 @@ def git_repo(tmp_path, monkeypatch):
 
 def test_checkpoint_preserves_working_tree(git_repo):
     from agent_ultimate import CheckpointManager
+
     # make an uncommitted edit
     (git_repo / "tracked.txt").write_text("UNCOMMITTED EDIT\n")
     out = CheckpointManager.create_checkpoint("safe-test")
@@ -49,6 +52,7 @@ def test_checkpoint_preserves_working_tree(git_repo):
 
 def test_checkpoint_restore_applies_snapshot(git_repo):
     from agent_ultimate import CheckpointManager
+
     # snapshot some experimental work
     (git_repo / "tracked.txt").write_text("EXPERIMENTAL WORK\n")
     CheckpointManager.create_checkpoint("cpA")
@@ -63,5 +67,6 @@ def test_checkpoint_restore_applies_snapshot(git_repo):
 
 def test_checkpoint_clean_tree_is_noop(git_repo):
     from agent_ultimate import CheckpointManager
+
     out = CheckpointManager.create_checkpoint("nothing")
     assert "Nothing to checkpoint" in out

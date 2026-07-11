@@ -1,24 +1,23 @@
 """GoalJudge — independent completion verdicts to prevent optimistic early stops."""
+
 import json
 import re
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 class GoalJudge:
-    def __init__(self, llm_fn: Optional[Callable[[str], str]] = None, tail: int = 12):
+    def __init__(self, llm_fn: Callable[[str], str] | None = None, tail: int = 12):
         self.llm_fn = llm_fn
         self.tail = tail
 
-    def verdict(self, goal: str, messages: List[Dict]) -> Dict:
+    def verdict(self, goal: str, messages: list[dict]) -> dict:
         """Fail-open: with no judge model or an unparseable reply, complete=True so the
         agent can never be trapped in an infinite loop by its own judge."""
         if not self.llm_fn:
             return {"complete": True, "reason": "no judge model configured", "confidence": 0.0}
-        transcript = "\n".join(
-            f"{m.get('role')}: {str(m.get('content') or '')[:300]}" for m in messages[-self.tail :]
-        )
+        transcript = "\n".join(f"{m.get('role')}: {str(m.get('content') or '')[:300]}" for m in messages[-self.tail :])
         prompt = (
             "You are a strict, independent judge evaluating whether an autonomous coding agent "
             "has TRULY completed its goal. Agents often claim success prematurely — verify against "
@@ -33,7 +32,7 @@ class GoalJudge:
         return self._parse(raw)
 
     @staticmethod
-    def _parse(raw: str) -> Dict:
+    def _parse(raw: str) -> dict:
         match = _JSON_OBJ_RE.search(raw)
         if match:
             try:

@@ -4,12 +4,12 @@ Every LLM call and tool execution emits a JSON line (.hermes/telemetry.jsonl,
 rotated at 10MB) and updates latency/error counters queryable via metrics().
 Standalone, stdlib-only, hook-driven, never raises into the agent loop.
 """
+
 import json
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 MAX_LOG_BYTES = 10_000_000
 
@@ -33,10 +33,14 @@ class _Timer:
         if seconds > 5:
             self.slow += 1
 
-    def snapshot(self) -> Dict:
-        return {"count": self.count, "errors": self.errors, "slow_gt5s": self.slow,
-                "avg_s": round(self.total / self.count, 3) if self.count else 0,
-                "max_s": round(self.max, 3)}
+    def snapshot(self) -> dict:
+        return {
+            "count": self.count,
+            "errors": self.errors,
+            "slow_gt5s": self.slow,
+            "avg_s": round(self.total / self.count, 3) if self.count else 0,
+            "max_s": round(self.max, 3),
+        }
 
 
 class Telemetry:
@@ -44,10 +48,10 @@ class Telemetry:
         self.root = Path(root_dir)
         self.path = self.root / "telemetry.jsonl"
         self._lock = threading.Lock()
-        self._timers: Dict[str, _Timer] = {}
-        self._counters: Dict[str, int] = {}
-        self._inflight: Dict[str, float] = {}  # key -> monotonic start
-        self._registered: List = []
+        self._timers: dict[str, _Timer] = {}
+        self._counters: dict[str, int] = {}
+        self._inflight: dict[str, float] = {}  # key -> monotonic start
+        self._registered: list = []
         self.started_at = time.time()
 
     # ── structured event log ──────────────────────────────────
@@ -79,9 +83,13 @@ class Telemetry:
 
     # ── hook wiring (llm + tool latency without touching the loop) ──
     def attach(self, hook_manager):
-        pairs = [("pre_llm", self._pre_llm), ("post_llm", self._post_llm),
-                 ("pre_tool", self._pre_tool), ("post_tool", self._post_tool),
-                 ("on_error", self._on_error)]
+        pairs = [
+            ("pre_llm", self._pre_llm),
+            ("post_llm", self._post_llm),
+            ("pre_tool", self._pre_tool),
+            ("post_tool", self._post_tool),
+            ("on_error", self._on_error),
+        ]
         for event, handler in pairs:
             hook_manager.register(event, handler)
         self._registered = [(hook_manager, e, h) for e, h in pairs]
@@ -100,8 +108,7 @@ class Telemetry:
             return
         elapsed = time.monotonic() - start
         self._timer("llm_call").observe(elapsed)
-        self.event("llm_call", seconds=round(elapsed, 3),
-                   chars=len(str(content or "")), tool_calls=len(tool_calls or []))
+        self.event("llm_call", seconds=round(elapsed, 3), chars=len(str(content or "")), tool_calls=len(tool_calls or []))
 
     def _pre_tool(self, calls=None, **kw):
         now = time.monotonic()
@@ -131,17 +138,14 @@ class Telemetry:
         self.event("error", message=str(error or "")[:500])
 
     # ── reporting ─────────────────────────────────────────────
-    def metrics(self) -> Dict:
+    def metrics(self) -> dict:
         with self._lock:
             timers = {k: t.snapshot() for k, t in sorted(self._timers.items())}
             counters = dict(self._counters)
-        return {"uptime_s": round(time.time() - self.started_at, 1),
-                "counters": counters, "latency": timers,
-                "telemetry_file": str(self.path)}
+        return {"uptime_s": round(time.time() - self.started_at, 1), "counters": counters, "latency": timers, "telemetry_file": str(self.path)}
 
-    def slowest_tools(self, k: int = 5) -> List[Dict]:
+    def slowest_tools(self, k: int = 5) -> list[dict]:
         with self._lock:
-            items = [(name[5:], t) for name, t in self._timers.items()
-                     if name.startswith("tool:") and name != "tool:_all"]
+            items = [(name[5:], t) for name, t in self._timers.items() if name.startswith("tool:") and name != "tool:_all"]
         items.sort(key=lambda p: p[1].max, reverse=True)
         return [{"tool": n, **t.snapshot()} for n, t in items[:k]]

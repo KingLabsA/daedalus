@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """daedalus — launcher for Daedalus (powered by the Hermes Deep Mind engine).
 
-  daedalus          rich terminal UI (falls back to plain CLI without `rich`)
-  daedalus web      web IDE: serves the built frontend + agent WS server, one process
-  daedalus ws       headless agent WebSocket server
-  daedalus doctor   scan this device for missing dependencies
-  daedalus models   what models can this machine run
-  daedalus version  print version
+daedalus          rich terminal UI (falls back to plain CLI without `rich`)
+daedalus web      web IDE: serves the built frontend + agent WS server, one process
+daedalus ws       headless agent WebSocket server
+daedalus doctor   scan this device for missing dependencies
+daedalus models   what models can this machine run
+daedalus version  print version
 """
+
 import argparse
 import json
 import os
@@ -27,6 +28,7 @@ VERSION = "2.0.4"
 
 # ── helpers (unit-tested) ─────────────────────────────────────
 
+
 def inject_token(html: str, token: str) -> str:
     """Idempotently inject the WS auth token into served index.html."""
     marker = "window.HERMES_TOKEN"
@@ -45,6 +47,7 @@ def find_dist(root: Path = ROOT) -> Path:
         return repo_dist
     try:
         import hermes_webui
+
         bundled = hermes_webui.dist_path()
         if (bundled / "index.html").is_file():
             return bundled
@@ -72,8 +75,10 @@ def build_frontend(root: Path = ROOT) -> bool:
 
 # ── web IDE ───────────────────────────────────────────────────
 
+
 class _SpaHandler(SimpleHTTPRequestHandler):
     """Static file server with SPA fallback and token-injected index.html."""
+
     token = ""
 
     def _serve_index(self):
@@ -103,14 +108,15 @@ def cmd_web(port: int, no_browser: bool = False):
     if not dist_ready():
         print("Frontend not built — building now (one-time, needs npm)...")
         if not build_frontend():
-            sys.exit("Could not build the frontend. Install node/npm (brew install node), "
-                     "then run: cd desktop && npm install && npm run build")
+            sys.exit("Could not build the frontend. Install node/npm (brew install node), then run: cd desktop && npm install && npm run build")
     token = secrets.token_hex(16)
     os.environ["HERMES_WS_TOKEN"] = token
 
     sys.path.insert(0, str(ROOT))
     import asyncio
+
     from agent_ultimate import UltimateAgent, run_ws_server
+
     agent = UltimateAgent()
     ws_thread = threading.Thread(target=lambda: asyncio.run(run_ws_server(agent)), daemon=True, name="hermes-ws")
     ws_thread.start()
@@ -132,9 +138,11 @@ def cmd_web(port: int, no_browser: bool = False):
 
 # ── rich TUI ──────────────────────────────────────────────────
 
+
 def cmd_tui():
     sys.path.insert(0, str(ROOT))
-    from agent_ultimate import UltimateAgent, PROVIDER_CONFIGS, MODEL_NAME
+    from agent_ultimate import MODEL_NAME, UltimateAgent
+
     try:
         from rich.console import Console
         from rich.markdown import Markdown
@@ -150,12 +158,14 @@ def cmd_tui():
     # persistent input history (up-arrow) across sessions
     try:
         import readline
+
         hist = Path.home() / ".hermes" / "cli_history"
         hist.parent.mkdir(parents=True, exist_ok=True)
         if hist.exists():
             readline.read_history_file(str(hist))
         readline.set_history_length(1000)
         import atexit
+
         atexit.register(lambda: readline.write_history_file(str(hist)))
     except Exception:
         pass
@@ -163,9 +173,9 @@ def cmd_tui():
     # diff-approve: render destructive tool calls and ask before they run
     def _approve(tool: str, args: dict, preview: str) -> bool:
         from rich.syntax import Syntax
+
         lang = "diff" if preview.startswith(("---", "@@", "-", "+")) or "\n+" in preview else "bash"
-        console.print(Panel(Syntax(preview, lang, theme="ansi_dark", word_wrap=True),
-                            title=f"[yellow]approve {tool}?[/]", border_style="yellow"))
+        console.print(Panel(Syntax(preview, lang, theme="ansi_dark", word_wrap=True), title=f"[yellow]approve {tool}?[/]", border_style="yellow"))
         try:
             ans = console.input("[yellow]apply? [y/N/a=allow-all] ▸ [/]").strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -175,6 +185,7 @@ def cmd_tui():
             console.print("[dim]safety → auto (approving remaining writes this session)[/]")
             return True
         return ans in ("y", "yes")
+
     agent.approve_fn = _approve
 
     if not agent.profiler.exists() and sys.stdin.isatty():
@@ -182,14 +193,16 @@ def cmd_tui():
 
     stats = agent.context.stats()
     profile = agent.profiler.load() or {}
-    console.print(Panel.fit(
-        f"[bold magenta]DAEDALUS[/] [dim]v{VERSION} — Hermes Deep Mind engine[/]\n"
-        f"provider [cyan]{agent.provider}[/] ({MODEL_NAME}) · auto-routing [green]on[/]\n"
-        f"[dim]{stats['memories']} memories · {stats['failures']} antibodies · "
-        f"{len(agent.registry.list_tools())} tools · persona: {profile.get('persona_label', '—')}[/]\n"
-        f"[dim]/help commands · /reset new chat · ↑ history · Ctrl-C interrupt · exit to quit[/]",
-        border_style="magenta",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold magenta]DAEDALUS[/] [dim]v{VERSION} — Hermes Deep Mind engine[/]\n"
+            f"provider [cyan]{agent.provider}[/] ({MODEL_NAME}) · auto-routing [green]on[/]\n"
+            f"[dim]{stats['memories']} memories · {stats['failures']} antibodies · "
+            f"{len(agent.registry.list_tools())} tools · persona: {profile.get('persona_label', '—')}[/]\n"
+            f"[dim]/help commands · /reset new chat · ↑ history · Ctrl-C interrupt · exit to quit[/]",
+            border_style="magenta",
+        )
+    )
 
     while True:
         try:
@@ -214,9 +227,11 @@ def cmd_tui():
                         console.print(handled)
                     continue
             streamed = {"n": 0}
+
             def _on_token(t: str):
                 streamed["n"] += 1
                 console.print(t, end="", style="dim", highlight=False, soft_wrap=True)
+
             agent.on_token = _on_token
             interrupted = False
             try:
@@ -237,8 +252,9 @@ def cmd_tui():
             subtitle = f"routed → {routed['provider']} (tier {routed['tier']})" if routed else agent.provider
             if failover:
                 subtitle += f" · failover→{failover[-1]['to']}"
-            console.print(Panel(Markdown(result or ""), title="hermes", subtitle=f"[dim]{subtitle}[/]",
-                                border_style="blue", title_align="left", subtitle_align="right"))
+            console.print(
+                Panel(Markdown(result or ""), title="hermes", subtitle=f"[dim]{subtitle}[/]", border_style="blue", title_align="left", subtitle_align="right")
+            )
         except KeyboardInterrupt:
             console.print("\n[yellow]⏹ interrupted[/]")
         except Exception as exc:
@@ -249,10 +265,13 @@ def cmd_tui():
 
 # ── one-shot utilities ────────────────────────────────────────
 
+
 def cmd_ws():
     sys.path.insert(0, str(ROOT))
     import asyncio
-    from agent_ultimate import UltimateAgent, run_ws_server, WS_HOST, WS_PORT
+
+    from agent_ultimate import WS_HOST, WS_PORT, UltimateAgent, run_ws_server
+
     print(f"Daedalus agent server (Hermes engine) on ws://{WS_HOST}:{WS_PORT}")
     asyncio.run(run_ws_server(UltimateAgent()))
 
@@ -261,9 +280,11 @@ def cmd_run(task: str, provider: str = "", auto: bool = False, as_json: bool = F
     """One-shot headless: run a single task, print the result, exit. For CI,
     scripts, and git hooks. Exit 0 on success, 1 on error/interrupt."""
     import json as _json
+
     sys.path.insert(0, str(ROOT))
     os.environ.setdefault("HERMES_SUBCONSCIOUS", "off")
     from agent_ultimate import UltimateAgent
+
     agent = UltimateAgent()
     if provider:
         agent.provider = provider
@@ -284,8 +305,7 @@ def cmd_run(task: str, provider: str = "", auto: bool = False, as_json: bool = F
     routed_to = routed["provider"] if routed else agent.provider
     if as_json:
         cs = agent.changesets.summary()
-        print(_json.dumps({"ok": True, "result": result, "routed_to": routed_to,
-                           "files_changed": [f["path"] for f in cs["files"]]}))
+        print(_json.dumps({"ok": True, "result": result, "routed_to": routed_to, "files_changed": [f["path"] for f in cs["files"]]}))
     else:
         print(result)
     return 0
@@ -295,6 +315,7 @@ def cmd_doctor():
     sys.path.insert(0, str(ROOT))
     from agent_ultimate import PROVIDER_CONFIGS, _live_providers
     from core.platform import DependencyScanner
+
     scanner = DependencyScanner(provider_configs=PROVIDER_CONFIGS)
     report = scanner.scan()
     print(scanner.summary(report))
@@ -314,6 +335,7 @@ def cmd_models():
     sys.path.insert(0, str(ROOT))
     from agent_ultimate import PROVIDER_CONFIGS
     from core.platform import ModelAdvisor
+
     print(ModelAdvisor(provider_configs=PROVIDER_CONFIGS).render())
 
 
@@ -342,6 +364,7 @@ def main(argv=None):
     elif args.cmd == "app":
         sys.path.insert(0, str(ROOT))
         import desktop_app
+
         desktop_app.run(port=args.port)
     elif args.cmd == "run":
         sys.exit(cmd_run(" ".join(args.task), args.provider, args.yes, args.json))

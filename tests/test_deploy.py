@@ -1,9 +1,7 @@
 """Tests for core.deploy — project detection + deploy planning (offline)."""
-import json
+
 import sys
 from pathlib import Path
-
-import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -23,10 +21,12 @@ def test_detect_static(tmp_path):
 
 def test_detect_python_and_fullstack(tmp_path):
     # the api template ships a Dockerfile -> detected as docker (still fly-deployable)
-    api = tmp_path / "api"; scaffold("api", "svc", str(api))
+    api = tmp_path / "api"
+    scaffold("api", "svc", str(api))
     assert detect(str(api)) == "docker"
     assert "fly" in targets(detect(str(api)), "svc")
-    fs = tmp_path / "fs"; scaffold("saas", "w", str(fs))
+    fs = tmp_path / "fs"
+    scaffold("saas", "w", str(fs))
     assert detect(str(fs)) == "fullstack"
 
 

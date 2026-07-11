@@ -1,4 +1,5 @@
 """Tests for core.observability — structured telemetry + metrics."""
+
 import json
 import sys
 import time
@@ -26,10 +27,8 @@ def test_llm_latency_recorded(tel):
 
 
 def test_tool_latency_and_errors(tel):
-    tel._pre_tool(calls=[{"id": "a", "name": "grep", "args": {}},
-                         {"id": "b", "name": "run_command", "args": {}}])
-    tel._post_tool(results=[{"id": "a", "result": "ok"},
-                            {"id": "b", "result": "ToolError: boom"}])
+    tel._pre_tool(calls=[{"id": "a", "name": "grep", "args": {}}, {"id": "b", "name": "run_command", "args": {}}])
+    tel._post_tool(results=[{"id": "a", "result": "ok"}, {"id": "b", "result": "ToolError: boom"}])
     m = tel.metrics()["latency"]
     assert m["tool:grep"]["count"] == 1 and m["tool:grep"]["errors"] == 0
     assert m["tool:run_command"]["errors"] == 1

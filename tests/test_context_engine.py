@@ -3,7 +3,7 @@
 All offline: no LLM calls (summarize_fn injectable), tmp DB per test.
 Also guards that core.context is importable WITHOUT importing agent_ultimate.
 """
-import json
+
 import sys
 from pathlib import Path
 
@@ -39,6 +39,7 @@ def engine(tmp_path):
 
 # ── Import isolation ─────────────────────────────────────────
 
+
 def test_core_context_importable_without_agent_ultimate():
     # core.context must not pull in the agent monolith
     assert "core.context" in sys.modules
@@ -54,6 +55,7 @@ def test_core_context_importable_without_agent_ultimate():
 
 
 # ── MemoryStore ──────────────────────────────────────────────
+
 
 def test_memory_add_search_rank(store):
     store.add_memory("The build system uses vite with port 5173", "project", 0.9)
@@ -86,6 +88,7 @@ def test_fts_query_injection_safe(store):
 
 # ── Failures / immune system ─────────────────────────────────
 
+
 def test_failure_dedup_bumps_hits(store):
     fid1 = store.record_failure("run_command", "run_command command=npm test", "Error: ENOENT npm")
     fid2 = store.record_failure("run_command", "run_command command=npm test", "Error: ENOENT npm")
@@ -96,14 +99,18 @@ def test_failure_dedup_bumps_hits(store):
 
 def test_immune_records_only_errors(store):
     immune = ImmuneSystem(store)
-    immune.observe_calls([
-        {"id": "a", "name": "read_file", "args": {"filepath": "x.py"}},
-        {"id": "b", "name": "run_command", "args": {"command": "pytest"}},
-    ])
-    recorded = immune.observe_results([
-        {"id": "a", "result": "file contents fine"},
-        {"id": "b", "result": "ToolError: pytest not found"},
-    ])
+    immune.observe_calls(
+        [
+            {"id": "a", "name": "read_file", "args": {"filepath": "x.py"}},
+            {"id": "b", "name": "run_command", "args": {"command": "pytest"}},
+        ]
+    )
+    recorded = immune.observe_results(
+        [
+            {"id": "a", "result": "file contents fine"},
+            {"id": "b", "result": "ToolError: pytest not found"},
+        ]
+    )
     assert recorded == 1
     assert store.stats()["failures"] == 1
 
@@ -118,6 +125,7 @@ def test_antibodies_block_rendering(store):
 
 
 # ── Budgeter ─────────────────────────────────────────────────
+
 
 def test_estimate_tokens():
     assert estimate_tokens("x" * 400) == 100
@@ -143,6 +151,7 @@ def test_budgeter_allocate_proportional():
 
 
 # ── Checkpointer ─────────────────────────────────────────────
+
 
 def _sample_messages():
     return [
@@ -182,6 +191,7 @@ def test_checkpoint_summarize_failure_is_swallowed(store):
 
 
 # ── ContextEngine ────────────────────────────────────────────
+
 
 def test_engine_injection_idempotent(engine):
     engine.store.add_memory("API server runs on port 3002", "project", 0.9)

@@ -1,13 +1,14 @@
 """ContextEngine — wires memory, budgeting, checkpoints, and immunity into the agent
 via lifecycle hooks. Never raises into the agent loop.
 """
+
 import re
 import traceback
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 
-from .budgeter import TokenBudgeter, estimate_tokens
+from .budgeter import TokenBudgeter
 from .checkpointer import Checkpointer
 from .immune import ImmuneSystem
 from .store import MemoryStore
@@ -26,7 +27,7 @@ class ContextEngine:
         session_id: str = "",
         root_dir: str = ".hermes/memory",
         max_context_tokens: int = 0,
-        summarize_fn: Optional[Callable[[str], str]] = None,
+        summarize_fn: Callable[[str], str] | None = None,
     ):
         self.store = MemoryStore(db_path, root_dir)
         self.budgeter = TokenBudgeter(max_context_tokens)
@@ -35,7 +36,7 @@ class ContextEngine:
         self.session_id = session_id or "default"
         self.root = Path(root_dir)
         self._resume_shown = False
-        self._live_messages: Optional[List[Dict]] = None
+        self._live_messages: list[dict] | None = None
         self._registered = []
 
     # ── Hook lifecycle ────────────────────────────────────────
@@ -63,7 +64,7 @@ class ContextEngine:
             pass
 
     # ── Handlers (never raise) ────────────────────────────────
-    def _on_pre_llm(self, messages: Optional[List[Dict]] = None, **kwargs):
+    def _on_pre_llm(self, messages: list[dict] | None = None, **kwargs):
         if not isinstance(messages, list) or not messages:
             return
         try:
@@ -74,13 +75,13 @@ class ContextEngine:
         except Exception as exc:
             self._log_error("pre_llm", exc)
 
-    def _on_pre_tool(self, calls: Optional[List[Dict]] = None, **kwargs):
+    def _on_pre_tool(self, calls: list[dict] | None = None, **kwargs):
         try:
             self.immune.observe_calls(calls or [])
         except Exception as exc:
             self._log_error("pre_tool", exc)
 
-    def _on_post_tool(self, results: Optional[List[Dict]] = None, **kwargs):
+    def _on_post_tool(self, results: list[dict] | None = None, **kwargs):
         try:
             self.immune.observe_results(results or [])
         except Exception as exc:
@@ -94,12 +95,12 @@ class ContextEngine:
             self._log_error("on_stop", exc)
 
     # ── Context injection ─────────────────────────────────────
-    def _build_block(self, messages: List[Dict]) -> str:
+    def _build_block(self, messages: list[dict]) -> str:
         alloc = self.budgeter.allocate(
             {"memory": 3.0, "antibodies": 2.0, "checkpoint": 2.0},
             total=min(2400, self.budgeter.budget // 8),
         )
-        sections: List[str] = []
+        sections: list[str] = []
 
         intent = ""
         for msg in reversed(messages):
@@ -130,7 +131,7 @@ class ContextEngine:
 
         return "\n\n".join(s for s in sections if s.strip())
 
-    def _inject(self, messages: List[Dict]):
+    def _inject(self, messages: list[dict]):
         block = self._build_block(messages)
         wrapped = f"{CTX_BEGIN}\n{block}\n{CTX_END}" if block else ""
         if messages[0].get("role") == "system":
@@ -144,7 +145,7 @@ class ContextEngine:
             messages.insert(0, {"role": "system", "content": wrapped})
 
     # ── Context reconstruction ────────────────────────────────
-    def _reconstruct(self, messages: List[Dict]):
+    def _reconstruct(self, messages: list[dict]):
         checkpoint = self.checkpointer.save(self.session_id, messages)
         system = messages[0] if messages[0].get("role") == "system" else None
         tail = messages[-RECENT_TAIL:]
@@ -152,8 +153,7 @@ class ContextEngine:
             tail = tail[1:]
         restore = {
             "role": "user",
-            "content": "[CONTEXT RESTORED FROM CHECKPOINT — earlier conversation was archived]\n"
-            + Checkpointer.render(checkpoint),
+            "content": "[CONTEXT RESTORED FROM CHECKPOINT — earlier conversation was archived]\n" + Checkpointer.render(checkpoint),
         }
         rebuilt = ([system] if system else []) + [restore] + [m for m in tail if m is not system]
         messages[:] = rebuilt
@@ -163,10 +163,10 @@ class ContextEngine:
         mem_id = self.store.add_memory(content, kind, importance)
         return f"Remembered #{mem_id} [{kind}] {content[:80]}"
 
-    def recall(self, query: str, k: int = 5) -> List[Dict]:
+    def recall(self, query: str, k: int = 5) -> list[dict]:
         return self.store.search_memories(query, k=k)
 
-    def stats(self) -> Dict:
+    def stats(self) -> dict:
         data = self.store.stats()
         data["max_context_tokens"] = self.budgeter.max_context_tokens
         data["session_id"] = self.session_id

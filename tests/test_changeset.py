@@ -1,5 +1,5 @@
 """Tests for core.changeset — record, review, accept/reject, path safety."""
-import os
+
 import sys
 from pathlib import Path
 
@@ -102,7 +102,7 @@ def test_reject_one_hunk_keeps_other(cs):
     cs_id = cs.summary()["id"]
     assert "Reverted hunk 0" in cs.reject_hunk(cs_id, "h.txt", 0)
     content = Path("h.txt").read_text()
-    assert "line2" in content and "CHANGED2" not in content   # hunk 0 restored
+    assert "line2" in content and "CHANGED2" not in content  # hunk 0 restored
     assert "CHANGED7" in content and "line7\n" not in content  # hunk 1 kept
     f = cs.summary(cs_id)["files"][0]
     assert f["status"] == "partial"

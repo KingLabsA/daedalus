@@ -14,6 +14,7 @@ application that bundles Python, the agent, and the UI.
     python desktop_app.py         # dev
     daedalus app                  # via the CLI (falls back to `web` if pywebview absent)
 """
+
 import os
 import secrets
 import sys
@@ -29,6 +30,7 @@ def _serve_ui(token: str, port: int):
     # reuse the launcher's SPA handler + dist resolution
     sys.path.insert(0, str(ROOT))
     import hermes_cli
+
     if not hermes_cli.dist_ready() and not hermes_cli.build_frontend():
         raise RuntimeError("Frontend not built. Run: cd desktop && npm install && npm run build")
     handler = partial(hermes_cli._SpaHandler, directory=str(hermes_cli.find_dist()))
@@ -39,7 +41,9 @@ def _serve_ui(token: str, port: int):
 
 def _start_agent():
     import asyncio
+
     from agent_ultimate import UltimateAgent, run_ws_server
+
     agent = UltimateAgent()
     asyncio.run(run_ws_server(agent))
 
@@ -48,10 +52,10 @@ def run(port: int = 8900, width: int = 1400, height: int = 900):
     try:
         import webview
     except ImportError:
-        print("pywebview not installed — falling back to the browser IDE.\n"
-              "For the native window: pip install 'daedalus-ai[app]'")
+        print("pywebview not installed — falling back to the browser IDE.\nFor the native window: pip install 'daedalus-ai[app]'")
         sys.path.insert(0, str(ROOT))
         import hermes_cli
+
         hermes_cli.cmd_web(port)
         return
 
@@ -62,8 +66,11 @@ def run(port: int = 8900, width: int = 1400, height: int = 900):
     threading.Thread(target=_serve_ui, args=(token, port), daemon=True, name="daedalus-ui").start()
 
     webview.create_window(
-        "Daedalus", f"http://127.0.0.1:{port}",
-        width=width, height=height, min_size=(900, 600),
+        "Daedalus",
+        f"http://127.0.0.1:{port}",
+        width=width,
+        height=height,
+        min_size=(900, 600),
         background_color="#16162a",
     )
     webview.start()  # blocks until the window closes

@@ -1,9 +1,8 @@
 """Tests for @file mentions and mid-run cancellation."""
+
 import os
 import sys
 import tempfile
-import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,10 +12,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
 import agent_ultimate as au
-from agent_ultimate import UltimateAgent, _expand_mentions, _Cancelled
-
+from agent_ultimate import UltimateAgent, _expand_mentions
 
 # ── @file mentions ───────────────────────────────────────────
+
 
 def test_expand_mentions_attaches_existing_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -69,6 +68,7 @@ def test_converse_expands_mentions(tmp_path, monkeypatch):
 
 # ── cancellation ─────────────────────────────────────────────
 
+
 @pytest.fixture
 def agent(monkeypatch):
     monkeypatch.setenv("HERMES_AUTO_ROUTE", "off")
@@ -83,8 +83,7 @@ def agent(monkeypatch):
 
 
 def test_cancel_before_iteration_returns_cancelled(agent, monkeypatch):
-    monkeypatch.setattr(au.ProviderRouter, "call",
-                        staticmethod(lambda m, s, provider=None: SimpleNamespace(content="x", tool_calls=[])))
+    monkeypatch.setattr(au.ProviderRouter, "call", staticmethod(lambda m, s, provider=None: SimpleNamespace(content="x", tool_calls=[])))
     agent.cancel_event.set()
     out = agent.run_loop([{"role": "system", "content": "s"}, {"role": "user", "content": "go"}], max_iters=3)
     assert out == "[cancelled]"
@@ -105,6 +104,7 @@ def test_cancel_stops_mid_stream(agent, monkeypatch):
         emitted.append(t)
         if len(emitted) == 3:
             agent.cancel_event.set()  # user hits cancel after 3 tokens
+
     agent.on_token = on_tok
     out = agent.run_loop([{"role": "system", "content": "s"}, {"role": "user", "content": "go"}], max_iters=2)
     agent.on_token = None

@@ -4,6 +4,7 @@ Real go-to-definition / references / diagnostics from pyright and
 typescript-language-server, with graceful degradation when not installed.
 Standalone: stdlib only. Never raises into the agent loop (callers get strings/lists).
 """
+
 import json
 import os
 import queue
@@ -12,7 +13,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 SERVERS = {
     ".py": ("pyright-langserver", ["pyright-langserver", "--stdio"], "npm install -g pyright"),
@@ -30,11 +31,10 @@ def _uri(path: Path) -> str:
 
 
 class _Connection:
-    def __init__(self, cmd: List[str], root: Path):
-        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.DEVNULL)
-        self.responses: "queue.Queue[dict]" = queue.Queue()
-        self.diagnostics: Dict[str, list] = {}
+    def __init__(self, cmd: list[str], root: Path):
+        self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.responses: queue.Queue[dict] = queue.Queue()
+        self.diagnostics: dict[str, list] = {}
         self.diag_event = threading.Event()
         self.next_id = 1
         self.lock = threading.Lock()
@@ -122,10 +122,10 @@ class _Connection:
 
 
 class LspClient:
-    def __init__(self, root: str = ".", servers: Optional[dict] = None):
+    def __init__(self, root: str = ".", servers: dict | None = None):
         self.root = Path(root).resolve()
         self.servers = servers or SERVERS
-        self._conns: Dict[str, _Connection] = {}
+        self._conns: dict[str, _Connection] = {}
         self._opened: set = set()
 
     # ── connection management ─────────────────────────────────
@@ -133,7 +133,7 @@ class LspClient:
         ext = Path(path).suffix.lower()
         return ext, self.servers.get(ext)
 
-    def _connect(self, path: str) -> Optional[_Connection]:
+    def _connect(self, path: str) -> _Connection | None:
         ext, spec = self._server_for(path)
         if not spec:
             return None
@@ -144,12 +144,16 @@ class LspClient:
         if not shutil.which(cmd[0]):
             return None
         conn = _Connection(cmd, self.root)
-        conn.request("initialize", {
-            "processId": os.getpid(),
-            "rootUri": _uri(self.root),
-            "workspaceFolders": [{"uri": _uri(self.root), "name": self.root.name}],
-            "capabilities": {"textDocument": {"publishDiagnostics": {}}},
-        }, timeout=20)
+        conn.request(
+            "initialize",
+            {
+                "processId": os.getpid(),
+                "rootUri": _uri(self.root),
+                "workspaceFolders": [{"uri": _uri(self.root), "name": self.root.name}],
+                "capabilities": {"textDocument": {"publishDiagnostics": {}}},
+            },
+            timeout=20,
+        )
         conn.notify("initialized", {})
         self._conns[name] = conn
         return conn
@@ -159,12 +163,17 @@ class LspClient:
         uri = _uri(p)
         if uri in self._opened:
             return uri
-        conn.notify("textDocument/didOpen", {"textDocument": {
-            "uri": uri,
-            "languageId": LANGUAGE_IDS.get(p.suffix.lower(), "plaintext"),
-            "version": 1,
-            "text": p.read_text(errors="replace"),
-        }})
+        conn.notify(
+            "textDocument/didOpen",
+            {
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": LANGUAGE_IDS.get(p.suffix.lower(), "plaintext"),
+                    "version": 1,
+                    "text": p.read_text(errors="replace"),
+                }
+            },
+        )
         self._opened.add(uri)
         return uri
 
@@ -175,7 +184,7 @@ class LspClient:
         return f"{spec[0]} not installed — {spec[2]}"
 
     @staticmethod
-    def _locations(result) -> List[Dict]:
+    def _locations(result) -> list[dict]:
         if result is None:
             return []
         items = result if isinstance(result, list) else [result]
@@ -184,15 +193,17 @@ class LspClient:
             uri = it.get("uri") or it.get("targetUri", "")
             rng = it.get("range") or it.get("targetSelectionRange") or {}
             start = rng.get("start", {})
-            out.append({
-                "file": uri.replace("file://", ""),
-                "line": start.get("line", 0) + 1,
-                "character": start.get("character", 0) + 1,
-            })
+            out.append(
+                {
+                    "file": uri.replace("file://", ""),
+                    "line": start.get("line", 0) + 1,
+                    "character": start.get("character", 0) + 1,
+                }
+            )
         return out
 
     # ── public API (never raises) ─────────────────────────────
-    def available(self) -> Dict[str, bool]:
+    def available(self) -> dict[str, bool]:
         seen = {}
         for _ext, (name, cmd, _hint) in self.servers.items():
             seen[name] = bool(shutil.which(cmd[0]))
@@ -204,10 +215,13 @@ class LspClient:
             if not conn:
                 return self._unavailable(path)
             uri = self._open(conn, path)
-            result = conn.request("textDocument/definition", {
-                "textDocument": {"uri": uri},
-                "position": {"line": max(0, line - 1), "character": max(0, character - 1)},
-            })
+            result = conn.request(
+                "textDocument/definition",
+                {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": max(0, line - 1), "character": max(0, character - 1)},
+                },
+            )
             return self._locations(result)
         except Exception as exc:
             return f"LSP definition failed: {exc}"
@@ -218,11 +232,14 @@ class LspClient:
             if not conn:
                 return self._unavailable(path)
             uri = self._open(conn, path)
-            result = conn.request("textDocument/references", {
-                "textDocument": {"uri": uri},
-                "position": {"line": max(0, line - 1), "character": max(0, character - 1)},
-                "context": {"includeDeclaration": True},
-            })
+            result = conn.request(
+                "textDocument/references",
+                {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": max(0, line - 1), "character": max(0, character - 1)},
+                    "context": {"includeDeclaration": True},
+                },
+            )
             return self._locations(result)
         except Exception as exc:
             return f"LSP references failed: {exc}"
@@ -242,9 +259,7 @@ class LspClient:
                 conn.diag_event.clear()
             diags = conn.diagnostics.get(uri, [])
             return [
-                {"line": d.get("range", {}).get("start", {}).get("line", 0) + 1,
-                 "severity": d.get("severity", 0),
-                 "message": d.get("message", "")[:300]}
+                {"line": d.get("range", {}).get("start", {}).get("line", 0) + 1, "severity": d.get("severity", 0), "message": d.get("message", "")[:300]}
                 for d in diags
             ]
         except Exception as exc:

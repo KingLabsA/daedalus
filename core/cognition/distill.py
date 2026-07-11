@@ -1,9 +1,10 @@
 """Distill — mine repeated tool workflows from the event log into reusable skills."""
+
 import re
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Tuple
 
 from .events import EventLog
 
@@ -13,7 +14,7 @@ class Distiller:
         self,
         events: EventLog,
         save_skill_fn: Callable[[str, str, list], None],
-        llm_fn: Optional[Callable[[str], str]] = None,
+        llm_fn: Callable[[str], str] | None = None,
         min_support: int = 3,
         min_len: int = 2,
         max_len: int = 5,
@@ -33,9 +34,7 @@ class Distiller:
 
     def _init_db(self):
         with self._conn() as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS distilled_skills(name TEXT PRIMARY KEY, support INTEGER, created_at TEXT)"
-            )
+            conn.execute("CREATE TABLE IF NOT EXISTS distilled_skills(name TEXT PRIMARY KEY, support INTEGER, created_at TEXT)")
 
     def _already_distilled(self, name: str) -> bool:
         with self._conn() as conn:
@@ -49,11 +48,11 @@ class Distiller:
             )
 
     @staticmethod
-    def _skill_name(gram: Tuple[str, ...]) -> str:
+    def _skill_name(gram: tuple[str, ...]) -> str:
         raw = "wf_" + "_".join(gram)
         return re.sub(r"[^A-Za-z0-9_]+", "_", raw)[:60]
 
-    def _mine(self) -> List[Tuple[Tuple[str, ...], int]]:
+    def _mine(self) -> list[tuple[tuple[str, ...], int]]:
         counts: Counter = Counter()
         for seq in self.events.sequences():
             for n in range(self.min_len, self.max_len + 1):
@@ -67,22 +66,21 @@ class Distiller:
         candidates.sort(key=lambda gc: (len(gc[0]), gc[1]), reverse=True)
         return candidates
 
-    def _describe(self, gram: Tuple[str, ...], support: int) -> str:
+    def _describe(self, gram: tuple[str, ...], support: int) -> str:
         default = f"Auto-distilled workflow: {' -> '.join(gram)} (observed {support}x)"
         if not self.llm_fn:
             return default
         try:
             desc = str(
                 self.llm_fn(
-                    "In one sentence, describe the purpose of this repeated coding-agent tool "
-                    f"workflow: {' -> '.join(gram)}. Reply with the sentence only."
+                    f"In one sentence, describe the purpose of this repeated coding-agent tool workflow: {' -> '.join(gram)}. Reply with the sentence only."
                 )
             ).strip()
             return desc[:200] if desc else default
         except Exception:
             return default
 
-    def distill(self) -> Dict:
+    def distill(self) -> dict:
         new_skills = []
         subsumed = set()
         mined = self._mine()

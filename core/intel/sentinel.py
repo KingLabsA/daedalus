@@ -2,8 +2,8 @@
 into context before the next LLM call. Uses its own markers so it never collides
 with the ContextEngine's injection block.
 """
+
 import re
-from typing import Dict, List, Optional
 
 WM_BEGIN = "<!--HERMES:WM:BEGIN-->"
 WM_END = "<!--HERMES:WM:END-->"
@@ -16,7 +16,7 @@ class WorldModelSentinel:
     def __init__(self, world_model, write_tools=WRITE_TOOLS):
         self.world_model = world_model
         self.write_tools = write_tools
-        self._pending: Dict[str, str] = {}
+        self._pending: dict[str, str] = {}
         self._registered = []
 
     def attach(self, hook_manager):
@@ -30,7 +30,7 @@ class WorldModelSentinel:
             hook_manager.unregister(event, handler)
         self._registered = []
 
-    def _on_pre_tool(self, calls: Optional[List[Dict]] = None, **kwargs):
+    def _on_pre_tool(self, calls: list[dict] | None = None, **kwargs):
         try:
             for call in calls or []:
                 if call.get("name") not in self.write_tools:
@@ -44,7 +44,7 @@ class WorldModelSentinel:
         except Exception:
             pass
 
-    def _on_pre_llm(self, messages: Optional[List[Dict]] = None, **kwargs):
+    def _on_pre_llm(self, messages: list[dict] | None = None, **kwargs):
         try:
             if not isinstance(messages, list) or not messages:
                 return

@@ -1,4 +1,5 @@
 """Tests for Phase 8 — hermes launcher helpers, WS auth gate, handle_command extraction."""
+
 import os
 import sys
 import tempfile
@@ -9,11 +10,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
-from hermes_cli import inject_token, find_dist, dist_ready
 from agent_ultimate import UltimateAgent, ws_token_ok
-
+from hermes_cli import dist_ready, find_dist, inject_token
 
 # ── token injection ──────────────────────────────────────────
+
 
 def test_inject_token_into_head():
     html = "<html><head><title>x</title></head><body></body></html>"
@@ -41,6 +42,7 @@ def test_inject_token_escapes_json():
 
 # ── WS auth gate ─────────────────────────────────────────────
 
+
 def test_ws_token_ok_no_requirement():
     assert ws_token_ok("/", "") is True
     assert ws_token_ok("", "") is True
@@ -57,6 +59,7 @@ def test_ws_token_ok_exact_match_required():
 
 # ── dist detection ───────────────────────────────────────────
 
+
 def test_dist_detection(tmp_path):
     assert dist_ready(tmp_path) is False
     dist = tmp_path / "desktop" / "dist"
@@ -67,6 +70,7 @@ def test_dist_detection(tmp_path):
 
 
 # ── handle_command extraction ────────────────────────────────
+
 
 @pytest.fixture(scope="module")
 def agent():

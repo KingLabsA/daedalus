@@ -1,4 +1,5 @@
 """Tests for core.senses — model orchestra (MoE), vision, voice. All offline with fakes."""
+
 import base64
 import re
 import sys
@@ -12,9 +13,7 @@ from core.senses import ModelOrchestra, Vision, VoiceIO
 from core.senses.vision import image_to_data_url
 
 # 1x1 transparent PNG
-PNG_BYTES = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
-)
+PNG_BYTES = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
 
 
 def test_senses_no_agent_ultimate_dependency():
@@ -25,6 +24,7 @@ def test_senses_no_agent_ultimate_dependency():
 
 
 # ── ModelOrchestra ───────────────────────────────────────────
+
 
 def _orchestra(available, answers=None):
     answers = answers or {}
@@ -98,6 +98,7 @@ def test_committee_single_survivor_skips_synthesis():
 
 
 # ── Vision ───────────────────────────────────────────────────
+
 
 def test_image_to_data_url(tmp_path):
     img = tmp_path / "pic.png"
@@ -175,6 +176,7 @@ def test_analyze_video_extractor_failure_is_graceful(tmp_path):
 
 
 # ── VoiceIO ──────────────────────────────────────────────────
+
 
 def test_transcribe_paths(tmp_path):
     unconfigured = VoiceIO()

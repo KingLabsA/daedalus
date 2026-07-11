@@ -3,18 +3,19 @@
 All network calls injected; recording/playback via sox or ffmpeg/afplay when present.
 Every failure degrades to a helpful string — never an exception.
 """
+
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 
 class VoiceIO:
     def __init__(
         self,
-        transcribe_fn: Optional[Callable[[str], str]] = None,
-        tts_fn: Optional[Callable[[str], bytes]] = None,
+        transcribe_fn: Callable[[str], str] | None = None,
+        tts_fn: Callable[[str], bytes] | None = None,
     ):
         self.transcribe_fn = transcribe_fn
         self.tts_fn = tts_fn

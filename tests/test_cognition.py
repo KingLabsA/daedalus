@@ -2,7 +2,7 @@
 
 All offline: fake llm_fns, tmp DBs, sub-second subconscious thresholds.
 """
-import json
+
 import sys
 import time
 from pathlib import Path
@@ -26,9 +26,9 @@ def events(tmp_path):
 
 
 def test_cognition_has_no_agent_ultimate_dependency():
-    import core.cognition as cog
-
     import re
+
+    import core.cognition as cog
 
     for mod_file in Path(cog.__file__).parent.glob("*.py"):
         src = mod_file.read_text()
@@ -37,15 +37,20 @@ def test_cognition_has_no_agent_ultimate_dependency():
 
 # ── EventLog ─────────────────────────────────────────────────
 
+
 def test_eventlog_hook_cycle_and_sequences(events):
-    events._on_pre_tool(calls=[
-        {"id": "1", "name": "read_file", "args": {"filepath": "a.py"}},
-        {"id": "2", "name": "edit_file_line", "args": {"filepath": "a.py"}},
-    ])
-    events._on_post_tool(results=[
-        {"id": "1", "result": "contents"},
-        {"id": "2", "result": "ToolError: no match"},
-    ])
+    events._on_pre_tool(
+        calls=[
+            {"id": "1", "name": "read_file", "args": {"filepath": "a.py"}},
+            {"id": "2", "name": "edit_file_line", "args": {"filepath": "a.py"}},
+        ]
+    )
+    events._on_post_tool(
+        results=[
+            {"id": "1", "result": "contents"},
+            {"id": "2", "result": "ToolError: no match"},
+        ]
+    )
     seqs = events.sequences()
     assert seqs == [["read_file", "edit_file_line"]]
     assert events.stats() == {"events": 2, "sessions": 1}
@@ -68,6 +73,7 @@ def test_eventlog_hooks_never_raise(events):
 
 
 # ── Distiller ────────────────────────────────────────────────
+
 
 def _populate_repeated_workflow(db, times=3):
     for i in range(times):
@@ -125,6 +131,7 @@ def test_distill_llm_description(tmp_path, events):
 
 # ── Dreamer ──────────────────────────────────────────────────
 
+
 def _session(*user_msgs):
     msgs = [{"role": "system", "content": "sys"}]
     for m in user_msgs:
@@ -134,9 +141,7 @@ def _session(*user_msgs):
 
 
 def test_dream_heuristic_extraction(store):
-    report = Dreamer(store).dream(
-        [_session("always use python3.14 for tests", "what time is it")], use_llm=False
-    )
+    report = Dreamer(store).dream([_session("always use python3.14 for tests", "what time is it")], use_llm=False)
     assert report["added"] == 1
     hits = store.search_memories("python3.14 tests")
     assert hits and "python3.14" in hits[0]["content"]
@@ -180,6 +185,7 @@ def test_dream_prune_caps_memories(store):
 
 # ── GoalJudge ────────────────────────────────────────────────
 
+
 def test_judge_fail_open_without_model():
     v = GoalJudge().verdict("ship it", [])
     assert v["complete"] is True and v["confidence"] == 0.0
@@ -217,6 +223,7 @@ def test_judge_prompt_includes_goal_and_transcript():
 
 
 # ── Subconscious ─────────────────────────────────────────────
+
 
 def _fast_subconscious(store, tmp_path, **kw):
     dreamer = Dreamer(store)

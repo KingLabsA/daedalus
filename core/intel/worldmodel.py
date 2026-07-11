@@ -3,14 +3,14 @@
 Built from git co-change history (files that historically change together) plus
 the Python import graph (fan-in). No dependencies beyond git itself.
 """
+
 import ast
 import subprocess
 from collections import Counter
 from itertools import combinations
 from pathlib import Path
-from typing import Dict, List, Tuple
 
-from .codeintel import SKIP_DIRS, _iter_source_files
+from .codeintel import _iter_source_files
 
 MEGA_COMMIT_CAP = 30  # commits touching more files than this are skipped (renames/vendoring skew)
 RISK_WARN_THRESHOLD = 0.3
@@ -20,13 +20,13 @@ class CausalWorldModel:
     def __init__(self, repo_path: str = ".", max_commits: int = 500):
         self.repo = Path(repo_path)
         self.max_commits = max_commits
-        self.co_change: Counter = Counter()   # {(a, b) sorted: count}
-        self.file_freq: Counter = Counter()   # {file: commits touching it}
-        self.fan_in: Dict[str, List[str]] = {}  # {file: [files importing it]}
+        self.co_change: Counter = Counter()  # {(a, b) sorted: count}
+        self.file_freq: Counter = Counter()  # {file: commits touching it}
+        self.fan_in: dict[str, list[str]] = {}  # {file: [files importing it]}
         self.built = False
 
     # ── Building ──────────────────────────────────────────────
-    def build(self) -> Dict:
+    def build(self) -> dict:
         self._mine_git()
         self._mine_imports()
         self.built = True
@@ -40,13 +40,16 @@ class CausalWorldModel:
         try:
             proc = subprocess.run(
                 ["git", "log", "--name-only", "--pretty=format:@@COMMIT@@", "-n", str(self.max_commits)],
-                capture_output=True, text=True, timeout=60, cwd=self.repo,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=self.repo,
             )
             raw = proc.stdout
         except (subprocess.TimeoutExpired, OSError):
             return
-        commit_files: List[str] = []
-        commits: List[List[str]] = []
+        commit_files: list[str] = []
+        commits: list[list[str]] = []
         for line in raw.splitlines():
             line = line.strip()
             if not line:
@@ -71,11 +74,11 @@ class CausalWorldModel:
                 self.co_change[(a, b)] += 1
 
     def _mine_imports(self):
-        stem_to_files: Dict[str, List[str]] = {}
+        stem_to_files: dict[str, list[str]] = {}
         py_files = list(_iter_source_files(self.repo, {".py"}, max_files=2000))
         for path in py_files:
             stem_to_files.setdefault(path.stem, []).append(str(path.relative_to(self.repo)))
-        importers: Dict[str, List[str]] = {}
+        importers: dict[str, list[str]] = {}
         for path in py_files:
             rel = str(path.relative_to(self.repo))
             try:
@@ -95,7 +98,7 @@ class CausalWorldModel:
         self.fan_in = importers
 
     # ── Queries ───────────────────────────────────────────────
-    def co_changed(self, filepath: str, k: int = 8) -> List[Tuple[str, float]]:
+    def co_changed(self, filepath: str, k: int = 8) -> list[tuple[str, float]]:
         if not self.built:
             self.build()
         freq = self.file_freq.get(filepath, 0)
@@ -109,7 +112,7 @@ class CausalWorldModel:
         related.sort(key=lambda pair: pair[1], reverse=True)
         return related[:k]
 
-    def blast_radius(self, filepath: str) -> Dict:
+    def blast_radius(self, filepath: str) -> dict:
         if not self.built:
             self.build()
         co = [(f, s) for f, s in self.co_changed(filepath) if s >= 0.25]
@@ -136,9 +139,6 @@ class CausalWorldModel:
         if radius["importers"]:
             lines.append("  imported by: " + ", ".join(radius["importers"][:6]))
         if radius["co_changes"]:
-            lines.append(
-                "  historically changes with: "
-                + ", ".join(f"{f} ({int(s * 100)}%)" for f, s in radius["co_changes"][:6])
-            )
+            lines.append("  historically changes with: " + ", ".join(f"{f} ({int(s * 100)}%)" for f, s in radius["co_changes"][:6]))
         lines.append("  -> after editing, verify these files still work (tests/diagnostics).")
         return "\n".join(lines)

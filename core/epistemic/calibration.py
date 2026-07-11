@@ -1,9 +1,9 @@
 """CalibrationTracker — records predicted confidence vs actual outcomes, so
 Hermes learns whether its 90% actually means 90% *in this environment*.
 """
+
 import sqlite3
 from datetime import datetime
-from typing import Dict, List, Optional
 
 BUCKETS = 10
 MIN_SAMPLES = 5
@@ -39,17 +39,16 @@ class CalibrationTracker:
         with self._conn() as conn:
             conn.execute(
                 "INSERT INTO calibration_events (kind, confidence, success, created_at) VALUES (?,?,?,?)",
-                (kind, max(0.0, min(1.0, confidence)), 1 if success else 0,
-                 datetime.now().isoformat(timespec="seconds")),
+                (kind, max(0.0, min(1.0, confidence)), 1 if success else 0, datetime.now().isoformat(timespec="seconds")),
             )
 
-    def calibrated(self, confidence: float, kind: Optional[str] = None) -> float:
+    def calibrated(self, confidence: float, kind: str | None = None) -> float:
         """Adjusted success probability for a stated confidence, from history.
         Laplace-smoothed; falls back to the raw confidence when data is thin."""
         bucket = self._bucket(confidence)
         low, high = bucket / BUCKETS, (bucket + 1) / BUCKETS
         query = "SELECT COUNT(*) AS n, SUM(success) AS wins FROM calibration_events WHERE confidence >= ? AND confidence < ?"
-        params: List = [low, high if bucket < BUCKETS - 1 else 1.01]
+        params: list = [low, high if bucket < BUCKETS - 1 else 1.01]
         if kind:
             query += " AND kind = ?"
             params.append(kind)
@@ -60,23 +59,19 @@ class CalibrationTracker:
             return confidence
         return (wins + 1) / (n + 2)  # Laplace
 
-    def success_rate(self, kind: str) -> Optional[float]:
+    def success_rate(self, kind: str) -> float | None:
         with self._conn() as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) AS n, SUM(success) AS wins FROM calibration_events WHERE kind = ?", (kind,)
-            ).fetchone()
+            row = conn.execute("SELECT COUNT(*) AS n, SUM(success) AS wins FROM calibration_events WHERE kind = ?", (kind,)).fetchone()
         n = row["n"] or 0
         if n < MIN_SAMPLES:
             return None
         return (row["wins"] + 1) / (n + 2)
 
-    def report(self) -> Dict:
+    def report(self) -> dict:
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT confidence, success, kind FROM calibration_events"
-            ).fetchall()
-        buckets = [{"range": f"{b/BUCKETS:.1f}-{(b+1)/BUCKETS:.1f}", "n": 0, "wins": 0} for b in range(BUCKETS)]
-        kinds: Dict[str, Dict] = {}
+            rows = conn.execute("SELECT confidence, success, kind FROM calibration_events").fetchall()
+        buckets = [{"range": f"{b / BUCKETS:.1f}-{(b + 1) / BUCKETS:.1f}", "n": 0, "wins": 0} for b in range(BUCKETS)]
+        kinds: dict[str, dict] = {}
         for row in rows:
             b = self._bucket(row["confidence"])
             buckets[b]["n"] += 1

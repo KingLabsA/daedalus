@@ -2,13 +2,13 @@
 
 Python via ast, JS/TS via regex — no LSP server processes required.
 """
+
 import ast
 import py_compile
 import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "dist", "build", ".venv", "venv", ".hermes", ".tox", "target"}
 PY_EXTS = {".py"}
@@ -39,7 +39,7 @@ class CodeIntel:
         self.root = Path(root)
 
     # ── Symbols ───────────────────────────────────────────────
-    def symbols(self, filepath: str) -> List[Dict]:
+    def symbols(self, filepath: str) -> list[dict]:
         path = Path(filepath)
         if not path.exists():
             return []
@@ -54,7 +54,7 @@ class CodeIntel:
         return []
 
     @staticmethod
-    def _py_symbols(text: str) -> List[Dict]:
+    def _py_symbols(text: str) -> list[dict]:
         try:
             tree = ast.parse(text)
         except SyntaxError:
@@ -74,7 +74,7 @@ class CodeIntel:
         return out
 
     @staticmethod
-    def _js_symbols(text: str) -> List[Dict]:
+    def _js_symbols(text: str) -> list[dict]:
         out = []
         for match in _JS_DEF_RE.finditer(text):
             name = match.group("fn") or match.group("cls") or match.group("var")
@@ -84,7 +84,7 @@ class CodeIntel:
         return out
 
     # ── Definitions / references ──────────────────────────────
-    def find_definition(self, name: str, max_results: int = 10) -> List[Dict]:
+    def find_definition(self, name: str, max_results: int = 10) -> list[dict]:
         out = []
         base = name.split(".")[-1]
         for path in _iter_source_files(self.root, PY_EXTS | JS_EXTS):
@@ -95,7 +95,7 @@ class CodeIntel:
                         return out
         return out
 
-    def references(self, name: str, max_results: int = 50) -> List[Dict]:
+    def references(self, name: str, max_results: int = 50) -> list[dict]:
         word = re.compile(r"\b" + re.escape(name) + r"\b")
         out = []
         for path in _iter_source_files(self.root, PY_EXTS | JS_EXTS):
@@ -114,9 +114,7 @@ class CodeIntel:
         target = Path(path) if Path(path).is_absolute() else self.root / path
         if shutil.which("pyright"):
             try:
-                proc = subprocess.run(
-                    ["pyright", "--outputjson", str(target)], capture_output=True, text=True, timeout=120
-                )
+                proc = subprocess.run(["pyright", "--outputjson", str(target)], capture_output=True, text=True, timeout=120)
                 return proc.stdout[:8000] or proc.stderr[:2000]
             except (subprocess.TimeoutExpired, OSError) as exc:
                 return f"pyright failed: {exc}"

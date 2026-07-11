@@ -2,8 +2,9 @@
 
 Standalone package: imports nothing from agent_ultimate. Stdlib only.
 """
+
 from .calibration import CalibrationTracker
-from .router import CostAwareRouter
 from .maxmode import MaxMode
+from .router import CostAwareRouter
 
 __all__ = ["CalibrationTracker", "CostAwareRouter", "MaxMode"]

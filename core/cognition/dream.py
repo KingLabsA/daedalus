@@ -1,25 +1,35 @@
 """Dream — consolidate session experience into persistent memory (auto /dream)."""
+
 import difflib
 import json
 import re
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 CORRECTION_MARKERS = (
-    "don't", "do not", "instead", "always", "never", "prefer",
-    "remember", "wrong", "actually", "stop doing", "use ",
+    "don't",
+    "do not",
+    "instead",
+    "always",
+    "never",
+    "prefer",
+    "remember",
+    "wrong",
+    "actually",
+    "stop doing",
+    "use ",
 )
 SIMILARITY_CUTOFF = 0.75
 _JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 
 
 class Dreamer:
-    def __init__(self, store, llm_fn: Optional[Callable[[str], str]] = None, max_memories: int = 500):
+    def __init__(self, store, llm_fn: Callable[[str], str] | None = None, max_memories: int = 500):
         self.store = store  # core.context.MemoryStore
         self.llm_fn = llm_fn
         self.max_memories = max_memories
 
     # ── Extraction ────────────────────────────────────────────
-    def _heuristic_candidates(self, sessions: List[List[Dict]]) -> List[Dict]:
+    def _heuristic_candidates(self, sessions: list[list[dict]]) -> list[dict]:
         candidates = []
         for messages in sessions:
             for msg in messages or []:
@@ -35,14 +45,12 @@ class Dreamer:
                     candidates.append({"content": content, "kind": "preference", "importance": 0.6})
         return candidates
 
-    def _llm_candidates(self, sessions: List[List[Dict]]) -> List[Dict]:
+    def _llm_candidates(self, sessions: list[list[dict]]) -> list[dict]:
         if not self.llm_fn:
             return []
         tails = []
         for messages in sessions[:5]:
-            tail = "\n".join(
-                f"{m.get('role')}: {str(m.get('content') or '')[:250]}" for m in (messages or [])[-20:]
-            )
+            tail = "\n".join(f"{m.get('role')}: {str(m.get('content') or '')[:250]}" for m in (messages or [])[-20:])
             if tail:
                 tails.append(tail)
         if not tails:
@@ -52,8 +60,7 @@ class Dreamer:
             "Extract ONLY durable, reusable knowledge: project facts, architecture decisions, "
             "user preferences, hard-won lessons. Skip transient task details.\n"
             'Reply with a JSON array only: [{"content": "...", "kind": "project|decision|note|preference", '
-            '"importance": 0.0-1.0}]. Max 8 items. Empty array if nothing durable.\n\n'
-            + "\n\n---\n\n".join(tails)
+            '"importance": 0.0-1.0}]. Max 8 items. Empty array if nothing durable.\n\n' + "\n\n---\n\n".join(tails)
         )
         try:
             raw = str(self.llm_fn(prompt))
@@ -65,11 +72,13 @@ class Dreamer:
             for item in items[:8]:
                 content = str(item.get("content", "")).strip()
                 if 5 <= len(content) <= 500:
-                    out.append({
-                        "content": content,
-                        "kind": str(item.get("kind", "note")),
-                        "importance": float(item.get("importance", 0.5)),
-                    })
+                    out.append(
+                        {
+                            "content": content,
+                            "kind": str(item.get("kind", "note")),
+                            "importance": float(item.get("importance", 0.5)),
+                        }
+                    )
             return out
         except Exception:
             return []
@@ -92,18 +101,17 @@ class Dreamer:
         return overflow
 
     # ── Public API ────────────────────────────────────────────
-    def dream(self, sessions: List[List[Dict]], use_llm: bool = True) -> Dict:
+    def dream(self, sessions: list[list[dict]], use_llm: bool = True) -> dict:
         candidates = self._heuristic_candidates(sessions)
         if use_llm:
             candidates += self._llm_candidates(sessions)
         added, dupes = 0, 0
-        seen_this_run: List[str] = []
+        seen_this_run: list[str] = []
         for cand in candidates:
             content = cand["content"]
-            if any(
-                difflib.SequenceMatcher(None, content.lower(), prev.lower()).ratio() >= SIMILARITY_CUTOFF
-                for prev in seen_this_run
-            ) or self._is_duplicate(content):
+            if any(difflib.SequenceMatcher(None, content.lower(), prev.lower()).ratio() >= SIMILARITY_CUTOFF for prev in seen_this_run) or self._is_duplicate(
+                content
+            ):
                 dupes += 1
                 continue
             self.store.add_memory(content, cand.get("kind", "note"), cand.get("importance", 0.5))

@@ -1,5 +1,5 @@
 """Tests for core.platform — MCP client, doctor, profiler, model advisor. All offline."""
-import json
+
 import re
 import sys
 import textwrap
@@ -9,7 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from core.platform import DependencyScanner, McpClient, ModelAdvisor, PERSONAS, ProfileBuilder
+from core.platform import PERSONAS, DependencyScanner, McpClient, ModelAdvisor, ProfileBuilder
 
 
 def test_platform_no_agent_ultimate_dependency():
@@ -88,6 +88,7 @@ def test_mcp_config_roundtrip(tmp_path):
 
 # ── DependencyScanner ────────────────────────────────────────
 
+
 def test_doctor_missing_and_ok():
     scanner = DependencyScanner(
         which_fn=lambda name: "/usr/bin/" + name if name in ("git", "node") else None,
@@ -126,6 +127,7 @@ def test_doctor_fix_script_and_summary():
 
 
 # ── ProfileBuilder ───────────────────────────────────────────
+
 
 class FakeStore:
     def __init__(self):
@@ -191,10 +193,17 @@ def test_all_personas_have_required_fields():
 
 # ── ModelAdvisor ─────────────────────────────────────────────
 
+
 def _advisor(ram_gb, apple=True, installed=None, providers=None, env=None):
     return ModelAdvisor(
-        spec_probe=lambda: {"os": "darwin", "arch": "arm64" if apple else "x86_64",
-                            "cpu_cores": 8, "ram_gb": ram_gb, "apple_silicon": apple, "nvidia_gpu": False},
+        spec_probe=lambda: {
+            "os": "darwin",
+            "arch": "arm64" if apple else "x86_64",
+            "cpu_cores": 8,
+            "ram_gb": ram_gb,
+            "apple_silicon": apple,
+            "nvidia_gpu": False,
+        },
         ollama_list=lambda: installed or [],
         provider_configs=providers or {},
         env=env or {},
@@ -219,7 +228,8 @@ def test_advisor_non_apple_discounts_ram():
 
 def test_advisor_flags_installed_and_cloud():
     advice = _advisor(
-        24, installed=["hermes3:8b", "king3djbl/mythos-v2-8b-q4:latest"],
+        24,
+        installed=["hermes3:8b", "king3djbl/mythos-v2-8b-q4:latest"],
         providers={"fable": {"env": "ANTHROPIC_API_KEY"}, "groq": {"env": "GROQ_API_KEY"}},
         env={"ANTHROPIC_API_KEY": "sk"},
     ).advise()

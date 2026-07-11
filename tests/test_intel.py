@@ -1,4 +1,5 @@
 """Tests for core.intel — code intelligence, semantic search, causal world model, sentinel."""
+
 import re
 import subprocess
 import sys
@@ -21,20 +22,13 @@ def test_intel_no_agent_ultimate_dependency():
 
 # ── CodeIntel ────────────────────────────────────────────────
 
+
 @pytest.fixture
 def project(tmp_path):
     (tmp_path / "auth.py").write_text(
-        "class LoginManager:\n"
-        "    def login(self, user):\n"
-        "        return validate_token(user)\n\n"
-        "def validate_token(user):\n"
-        "    return True\n"
+        "class LoginManager:\n    def login(self, user):\n        return validate_token(user)\n\ndef validate_token(user):\n    return True\n"
     )
-    (tmp_path / "app.js").write_text(
-        "export function renderDashboard() {}\n"
-        "class ApiClient {}\n"
-        "const fetchUser = async () => {}\n"
-    )
+    (tmp_path / "app.js").write_text("export function renderDashboard() {}\nclass ApiClient {}\nconst fetchUser = async () => {}\n")
     (tmp_path / "main.py").write_text("from auth import LoginManager\n\nmanager = LoginManager()\n")
     return tmp_path
 
@@ -73,10 +67,9 @@ def test_diagnostics_syntax_fallback(tmp_path, monkeypatch):
 
 # ── SemanticIndex ────────────────────────────────────────────
 
+
 def test_semantic_search_relevance(tmp_path):
-    (tmp_path / "payments.py").write_text(
-        "def charge_credit_card(amount, card_number):\n    '''Process a payment charge'''\n    pass\n"
-    )
+    (tmp_path / "payments.py").write_text("def charge_credit_card(amount, card_number):\n    '''Process a payment charge'''\n    pass\n")
     (tmp_path / "animals.py").write_text("def feed_zebra():\n    pass\n")
     idx = SemanticIndex(str(tmp_path))
     hits = idx.search("process credit card payment")
@@ -96,6 +89,7 @@ def test_semantic_search_empty_query(tmp_path):
 
 
 # ── CausalWorldModel ─────────────────────────────────────────
+
 
 @pytest.fixture
 def git_repo(tmp_path):
@@ -156,6 +150,7 @@ def test_worldmodel_outside_git_is_graceful(tmp_path):
 
 # ── WorldModelSentinel ───────────────────────────────────────
 
+
 class FakeWM:
     def __init__(self, warning="[WORLD MODEL] danger in hot.py"):
         self.warning = warning
@@ -166,11 +161,13 @@ class FakeWM:
 
 def test_sentinel_injects_and_clears():
     sentinel = WorldModelSentinel(FakeWM())
-    sentinel._on_pre_tool(calls=[
-        {"name": "write_file", "args": {"filepath": "hot.py"}},
-        {"name": "write_file", "args": {"filepath": "cold.py"}},
-        {"name": "read_file", "args": {"filepath": "hot.py"}},  # not a write tool
-    ])
+    sentinel._on_pre_tool(
+        calls=[
+            {"name": "write_file", "args": {"filepath": "hot.py"}},
+            {"name": "write_file", "args": {"filepath": "cold.py"}},
+            {"name": "read_file", "args": {"filepath": "hot.py"}},  # not a write tool
+        ]
+    )
     messages = [{"role": "system", "content": "base"}, {"role": "user", "content": "go"}]
     sentinel._on_pre_llm(messages=messages)
     assert WM_BEGIN in messages[0]["content"] and "danger in hot.py" in messages[0]["content"]

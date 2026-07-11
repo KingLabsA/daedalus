@@ -2,9 +2,10 @@
 
 Standalone package: imports nothing from agent_ultimate. Stdlib only.
 """
-from .mcp_client import McpClient
+
 from .doctor import DependencyScanner
-from .profiler import ProfileBuilder, PERSONAS
+from .mcp_client import McpClient
 from .modeladvisor import ModelAdvisor
+from .profiler import PERSONAS, ProfileBuilder
 
 __all__ = ["McpClient", "DependencyScanner", "ProfileBuilder", "PERSONAS", "ModelAdvisor"]

@@ -2,12 +2,12 @@
 
 Standalone package: imports nothing from agent_ultimate. Stdlib only.
 """
-from .codeintel import CodeIntel
-from .semsearch import SemanticIndex
-from .worldmodel import CausalWorldModel
-from .sentinel import WorldModelSentinel
-from .lsp import LspClient
-from .embeddings import EmbeddingIndex, HybridSearch
 
-__all__ = ["CodeIntel", "SemanticIndex", "CausalWorldModel", "WorldModelSentinel",
-           "LspClient", "EmbeddingIndex", "HybridSearch"]
+from .codeintel import CodeIntel
+from .embeddings import EmbeddingIndex, HybridSearch
+from .lsp import LspClient
+from .semsearch import SemanticIndex
+from .sentinel import WorldModelSentinel
+from .worldmodel import CausalWorldModel
+
+__all__ = ["CodeIntel", "SemanticIndex", "CausalWorldModel", "WorldModelSentinel", "LspClient", "EmbeddingIndex", "HybridSearch"]

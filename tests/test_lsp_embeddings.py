@@ -1,5 +1,5 @@
 """Tests for core.intel.lsp + embeddings. Offline: scripted fake LSP server, fake embed_fn."""
-import json
+
 import re
 import sys
 import textwrap
@@ -61,9 +61,12 @@ def lsp(tmp_path, monkeypatch):
     server = tmp_path / "fake_lsp.py"
     server.write_text(FAKE_LSP)
     (tmp_path / "code.py").write_text("import os\n\nx = broken\n")
-    client = LspClient(str(tmp_path), servers={
-        ".py": ("fake-lsp", [sys.executable, str(server)], "n/a"),
-    })
+    client = LspClient(
+        str(tmp_path),
+        servers={
+            ".py": ("fake-lsp", [sys.executable, str(server)], "n/a"),
+        },
+    )
     # bypass shutil.which for our python-script server
     monkeypatch.setattr("core.intel.lsp.shutil.which", lambda c: c)
     yield client
@@ -100,10 +103,10 @@ def test_lsp_not_installed(tmp_path, monkeypatch):
 
 # ── embeddings ───────────────────────────────────────────────
 
+
 def _fake_embed(texts):
     # deterministic tiny "embedding": [len, vowels, 'pay' mentions]
-    return [[float(len(t)), float(sum(t.count(v) for v in "aeiou")),
-             float(t.lower().count("payment") * 50)] for t in texts]
+    return [[float(len(t)), float(sum(t.count(v) for v in "aeiou")), float(t.lower().count("payment") * 50)] for t in texts]
 
 
 @pytest.fixture
@@ -133,7 +136,7 @@ def test_embedding_cache_reused(repo):
     first = calls["n"]
     idx2 = EmbeddingIndex(str(repo), embed_fn=counting_embed, cache_path=cache)
     report = idx2.build()
-    assert report["embedded_new"] == 0          # everything served from hash cache
+    assert report["embedded_new"] == 0  # everything served from hash cache
     assert calls["n"] == first
     # touching a file re-embeds only that file
     (repo / "zoo.py").write_text("def feed_animals():\n    return 'fed'\n")

@@ -2,9 +2,10 @@
 distinct models, an independent judge scores them, the winner is returned and
 the judge's implied confidence feeds the calibration tracker.
 """
+
 import json
 import re
-from typing import Callable, Dict, List, Optional
+from collections.abc import Callable
 
 _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
@@ -12,8 +13,8 @@ _JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 class MaxMode:
     def __init__(
         self,
-        candidates_fn: Callable[[str, int], Dict[str, str]],
-        judge_fn: Optional[Callable[[str], str]] = None,
+        candidates_fn: Callable[[str, int], dict[str, str]],
+        judge_fn: Callable[[str], str] | None = None,
         tracker=None,
     ):
         """candidates_fn(prompt, n) -> {provider: answer}; judge_fn(prompt) -> str (LLM)."""
@@ -21,12 +22,10 @@ class MaxMode:
         self.judge_fn = judge_fn
         self.tracker = tracker
 
-    def _score(self, prompt: str, candidates: Dict[str, str]) -> Dict[str, float]:
+    def _score(self, prompt: str, candidates: dict[str, str]) -> dict[str, float]:
         if not self.judge_fn:
             return {}
-        listing = "\n\n".join(
-            f"### CANDIDATE {name}\n{answer[:2500]}" for name, answer in candidates.items()
-        )
+        listing = "\n\n".join(f"### CANDIDATE {name}\n{answer[:2500]}" for name, answer in candidates.items())
         judge_prompt = (
             "You are a strict judge. Score each candidate answer 0-10 for correctness, "
             "completeness, and usefulness for the question. Reply with JSON only: "
@@ -47,7 +46,7 @@ class MaxMode:
         except Exception:
             return {}
 
-    def run(self, prompt: str, n: int = 3) -> Dict:
+    def run(self, prompt: str, n: int = 3) -> dict:
         try:
             candidates = self.candidates_fn(prompt, n) or {}
         except Exception as exc:
