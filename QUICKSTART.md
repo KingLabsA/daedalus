@@ -17,6 +17,7 @@ daedalus          # rich terminal UI (streams tokens, renders markdown)
 daedalus web      # web IDE at http://127.0.0.1:8899 (one process, token-protected)
 daedalus app      # standalone NATIVE desktop window (pip install "daedalus-ai[app]")
 daedalus models   # which local/cloud models this hardware can run
+daedalus run "fix the failing test" --yes --json   # one-shot headless (CI/scripts)
 ```
 
 ## Models — local-first, free-only
