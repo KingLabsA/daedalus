@@ -257,6 +257,40 @@ def cmd_ws():
     asyncio.run(run_ws_server(UltimateAgent()))
 
 
+def cmd_run(task: str, provider: str = "", auto: bool = False, as_json: bool = False) -> int:
+    """One-shot headless: run a single task, print the result, exit. For CI,
+    scripts, and git hooks. Exit 0 on success, 1 on error/interrupt."""
+    import json as _json
+    sys.path.insert(0, str(ROOT))
+    os.environ.setdefault("HERMES_SUBCONSCIOUS", "off")
+    from agent_ultimate import UltimateAgent
+    agent = UltimateAgent()
+    if provider:
+        agent.provider = provider
+        agent._provider_pinned = True
+    if auto:
+        agent.safety.mode = "auto"
+    try:
+        result = agent.converse(task)
+    except Exception as exc:
+        print(_json.dumps({"ok": False, "error": str(exc)}) if as_json else f"Error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        try:
+            agent.subconscious.stop()
+        except Exception:
+            pass
+    routed = next((l for l in reversed(agent.logs) if l.get("type") == "auto_route"), None)
+    routed_to = routed["provider"] if routed else agent.provider
+    if as_json:
+        cs = agent.changesets.summary()
+        print(_json.dumps({"ok": True, "result": result, "routed_to": routed_to,
+                           "files_changed": [f["path"] for f in cs["files"]]}))
+    else:
+        print(result)
+    return 0
+
+
 def cmd_doctor():
     sys.path.insert(0, str(ROOT))
     from agent_ultimate import PROVIDER_CONFIGS, _live_providers
@@ -292,6 +326,11 @@ def main(argv=None):
     web.add_argument("--no-browser", action="store_true")
     app = sub.add_parser("app", help="standalone native desktop window (pywebview)")
     app.add_argument("--port", type=int, default=8900)
+    run_p = sub.add_parser("run", help="one-shot headless: run a task, print result, exit (CI/scripts)")
+    run_p.add_argument("task", nargs="+", help="the task to run")
+    run_p.add_argument("--provider", default="", help="pin a provider (else auto-route)")
+    run_p.add_argument("--yes", action="store_true", help="auto-approve file writes/commands")
+    run_p.add_argument("--json", action="store_true", help="emit JSON (result, routed_to, files_changed)")
     sub.add_parser("ws", help="headless agent WebSocket server")
     sub.add_parser("doctor", help="scan device for missing dependencies")
     sub.add_parser("models", help="models this machine can run")
@@ -304,6 +343,8 @@ def main(argv=None):
         sys.path.insert(0, str(ROOT))
         import desktop_app
         desktop_app.run(port=args.port)
+    elif args.cmd == "run":
+        sys.exit(cmd_run(" ".join(args.task), args.provider, args.yes, args.json))
     elif args.cmd == "ws":
         cmd_ws()
     elif args.cmd == "doctor":
