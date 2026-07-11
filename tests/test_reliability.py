@@ -214,3 +214,13 @@ def test_on_token_streams_and_assembles(agent, monkeypatch):
         agent.on_token = None
     assert tokens == ["Hel", "lo!"]
     assert out == "Hello!"
+
+
+def test_opencode_provider_config():
+    from core.providers import PROVIDER_CONFIGS
+    c = PROVIDER_CONFIGS["opencode"]
+    assert c["env"] == "OPENCODE_API_KEY"
+    assert "opencode.ai" in c["base"] and c["base"].endswith("/v1")
+    assert c["lib"] == "openai"  # OpenAI-compatible gateway
+    from core.epistemic.router import PROVIDER_TIERS
+    assert PROVIDER_TIERS["opencode"] == 4  # strong tier
