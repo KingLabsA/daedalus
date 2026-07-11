@@ -49,6 +49,9 @@ desktop = [
 browser = [
     "playwright>=1.40",
 ]
+app = [
+    "pywebview>=5.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

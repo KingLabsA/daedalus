@@ -41,7 +41,13 @@ python agent_ultimate.py
 python agent_ultimate.py ws
 ```
 
-## Desktop App
+## Standalone Desktop (native, no Tauri)
+
+`daedalus app` opens a real native OS window (pywebview → WebKit) driving the
+same engine — no browser, no Rust, no Tauri crash. Build a double-clickable
+`.app`: `./build_app.sh` → `dist/Daedalus.app`.
+
+## Desktop App (legacy Tauri — parked)
 
 ```bash
 cd desktop

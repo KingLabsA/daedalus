@@ -290,6 +290,8 @@ def main(argv=None):
     web = sub.add_parser("web", help="web IDE (serves frontend + agent)")
     web.add_argument("--port", type=int, default=8899)
     web.add_argument("--no-browser", action="store_true")
+    app = sub.add_parser("app", help="standalone native desktop window (pywebview)")
+    app.add_argument("--port", type=int, default=8900)
     sub.add_parser("ws", help="headless agent WebSocket server")
     sub.add_parser("doctor", help="scan device for missing dependencies")
     sub.add_parser("models", help="models this machine can run")
@@ -298,6 +300,10 @@ def main(argv=None):
 
     if args.cmd == "web":
         cmd_web(args.port, args.no_browser)
+    elif args.cmd == "app":
+        sys.path.insert(0, str(ROOT))
+        import desktop_app
+        desktop_app.run(port=args.port)
     elif args.cmd == "ws":
         cmd_ws()
     elif args.cmd == "doctor":
