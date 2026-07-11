@@ -31,14 +31,14 @@ from core.intel import CausalWorldModel, CodeIntel, EmbeddingIndex, HybridSearch
 from core.observability import Telemetry
 from core.platform import DependencyScanner, McpClient, ModelAdvisor, ProfileBuilder
 from core.providers import (
+    _LIVE_CACHE,
+    _LIVE_TTL,
     COST_PER_1K,
     HERMES_CONFIG_PATH,
     LLM_PROVIDER,
     MODEL_NAME,
     PROVIDER_CONFIGS,
     ProviderRouter,
-    _LIVE_CACHE,
-    _LIVE_TTL,
     _available_providers,
     _get_cost_summary,
     _get_provider_client,
@@ -54,7 +54,8 @@ from core.providers import (
 )
 from core.senses import ModelOrchestra, Vision, VoiceIO
 from core.senses.orchestra import DEFAULT_PROFILES as _ORCHESTRA_PROFILES
-from core.server import WebSocketServer as _CoreWebSocketServer, ws_token_ok
+from core.server import WebSocketServer as _CoreWebSocketServer
+from core.server import ws_token_ok
 
 # Fable 5 leads the reasoning/creative expert profiles when its key is present
 for _profile_name in ("reasoning", "creative", "long_context"):

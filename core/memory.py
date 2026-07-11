@@ -8,7 +8,6 @@ import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from core.providers import LLM_PROVIDER, ProviderRouter
 
@@ -30,7 +29,7 @@ class SessionStore:
             conn.execute("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, messages TEXT, updated_at TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS skills (name TEXT PRIMARY KEY, content TEXT, created_at TEXT)")
 
-    def load(self, session_id: str) -> Optional[list[dict]]:
+    def load(self, session_id: str) -> list[dict] | None:
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute("SELECT messages FROM sessions WHERE session_id = ?", (session_id,)).fetchone()
             return json.loads(row[0]) if row else None

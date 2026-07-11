@@ -4,7 +4,6 @@ Standalone: imports nothing from agent_ultimate. Provider calls injected via
 ProviderRouter from core.providers.
 """
 
-import hashlib
 import inspect
 import json
 import os
@@ -15,19 +14,17 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 from core.providers import (
     LLM_PROVIDER,
     PROVIDER_CONFIGS,
     ProviderRouter,
-    _get_cost_summary,
     _get_provider_client,
-    _track_cost,
-    session_costs,
 )
 
 # ============== SECURITY CONSTANTS ==============
@@ -165,7 +162,7 @@ class ToolRegistry:
 
         return decorator
 
-    def get(self, name: str) -> Optional[Callable]:
+    def get(self, name: str) -> Callable | None:
         return self._tools.get(name)
 
     def list_tools(self) -> list[str]:
@@ -220,7 +217,7 @@ registry = ToolRegistry()
 # ============== TOOL FUNCTIONS ==============
 @registry.register(description="Read the contents of a file")
 def read_file(filepath: str) -> str:
-    with open(os.path.expanduser(filepath), "r") as f:
+    with open(os.path.expanduser(filepath)) as f:
         return f.read()
 
 
@@ -668,7 +665,7 @@ def git_branch(name: str = "", switch: str = "false") -> str:
 @registry.register(description="Show git log (last N commits with stats).")
 def git_log(n: str = "10") -> str:
     try:
-        r = subprocess.run(["git", "log", f"--oneline", "--stat", "-n", str(n)], capture_output=True, text=True, cwd=os.getcwd())
+        r = subprocess.run(["git", "log", "--oneline", "--stat", "-n", str(n)], capture_output=True, text=True, cwd=os.getcwd())
         return r.stdout.strip() or "(no commits)"
     except Exception as e:
         return f"git_log error: {e}"
@@ -785,7 +782,7 @@ def poll_process(pid: str) -> str:
     if proc.poll() is not None:
         del _bg_processes[pid]
         return f"{output}\n[exited with code {proc.returncode}]" if output else f"[exited with code {proc.returncode}]"
-    return output if output else f"[running, no output yet]"
+    return output if output else "[running, no output yet]"
 
 
 @registry.register(description="Kill a background process by its pid.")
