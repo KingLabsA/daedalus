@@ -23,7 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "2.0.4"
+VERSION = "3.0.0"
 
 
 # ── helpers (unit-tested) ─────────────────────────────────────
