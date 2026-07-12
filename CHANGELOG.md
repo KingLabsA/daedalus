@@ -1,5 +1,39 @@
 # Changelog
 
+## 3.0.0 — "Ship it" (2026-07-11)
+
+The build→verify→ship pipeline, all three surfaces hardened, and the codebase modularized.
+
+### Text-to-app → verify → deploy
+- **Scaffold** (`/ship`, `scaffold_app`): 17 runnable project kinds — web, tailwind/shadcn,
+  supabase, next/t3, astro, svelte, api (FastAPI), saas/fullstack, cli, mobile/ios/android
+  (Expo), and a self-extending **MCP tool server**. Uses the canonical `create-*` generator
+  when installed, else a built-in skeleton.
+- **Eval gate** (`verify_project`): build must pass / code must compile / tests must be green /
+  MCP must handshake — a broken app is **blocked** from deploying.
+- **Deploy planning** (`deploy_plan`, `/deploy`): detects the project, writes the provider
+  config (vercel.json / netlify.toml / fly.toml / eas.json), returns the exact commands.
+  Targets: Vercel, Netlify, Fly.io, Expo EAS.
+
+### Surfaces
+- **Web Cockpit**: chat + Monaco editor + sandbox terminal + live preview + ShipBar
+  (one-click Scaffold / Verify / Deploy) on one page; per-file and per-hunk changeset review.
+- **Native desktop** (`daedalus app`): real pywebview window (not Tauri); `build_app.sh`
+  produces a self-contained `Daedalus.app`.
+- **Headless** (`daedalus run "<task>" --yes --json`): one-shot for CI / scripts / git hooks.
+- UI fixes: persistent Stop button, full-bleed layout, fixed sidebar.
+
+### Engine & providers
+- **OpenCode Zen** provider (frontier models via one key); native-Ollama `num_ctx` routing
+  (fixes 8B models loading at 23 GB); validated-liveness routing across 24 providers.
+- Modularization slices 1–4: provider layer, WebSocket server, memory/kanban/tools, and
+  Checkpoint/Safety extracted from the monolith into standalone `core/*` packages.
+
+### Quality
+- 291 offline tests; ruff lint gate; CI on macOS + Linux × Python 3.11–3.13.
+- Comprehensive README; security audit (no keys in repo/history).
+
+
 ## 2.0.0 — "Daedalus" (2026-07-09)
 
 **Rebrand**: the product is now **Daedalus** (the app across terminal, web, and
