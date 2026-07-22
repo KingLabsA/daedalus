@@ -105,7 +105,7 @@ class EmbeddingIndex:
             vecs = self.embed_fn(pending_texts) if pending_texts else []
             if vecs is None:
                 return {"error": "embedding model unavailable", "files": files, "chunks": len(self._chunks)}
-            for line_no, chunk_text, vec in zip(pending_meta, pending_texts, vecs):
+            for line_no, chunk_text, vec in zip(pending_meta, pending_texts, vecs, strict=True):
                 entry = {"line": line_no, "text": chunk_text[:200], "vec": vec}
                 file_chunks.append(entry)
                 self._chunks.append({"file": rel, **entry})
