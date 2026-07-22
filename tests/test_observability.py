@@ -39,10 +39,10 @@ def test_structured_events_written(tel, tmp_path):
     tel._pre_llm()
     tel._post_llm(content="x", tool_calls=[])
     tel._on_error(error="something broke")
-    lines = [json.loads(l) for l in (tmp_path / "telemetry.jsonl").read_text().splitlines()]
-    kinds = [l["kind"] for l in lines]
+    lines = [json.loads(line) for line in (tmp_path / "telemetry.jsonl").read_text().splitlines()]
+    kinds = [line["kind"] for line in lines]
     assert "llm_call" in kinds and "error" in kinds
-    assert all("ts" in l for l in lines)
+    assert all("ts" in line for line in lines)
     assert tel.metrics()["counters"]["errors"] == 1
 
 
